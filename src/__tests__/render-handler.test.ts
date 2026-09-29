@@ -84,9 +84,12 @@ async function probeVideo(videoPath: string): Promise<{
 /** Fake sign client that maps inputName → local file path */
 class FakeSignClient {
   private readonly map = new Map<string, string>();
+  private readonly spans = new Map<string, { start_ms: number; end_ms: number }>();
 
-  register(inputName: string, localPath: string): void {
+  /** `span`: where the segment sits inside the file, as ag-go `resolve` reports it. */
+  register(inputName: string, localPath: string, span?: { start_ms: number; end_ms: number }): void {
     this.map.set(inputName, localPath);
+    if (span) this.spans.set(inputName, span);
   }
 
   async sign(ops: Array<{ op: string; input?: string; output?: string }>): Promise<unknown[]> {
@@ -105,8 +108,8 @@ class FakeSignClient {
           source: {
             source_kind: 'original',
             watermarked: false,
-            start_ms: null,
-            end_ms: null,
+            start_ms: this.spans.get(op.input)?.start_ms ?? null,
+            end_ms: this.spans.get(op.input)?.end_ms ?? null,
           },
         };
       }
@@ -358,3 +361,99 @@ describe('studio.render_preview handler (integration)', () => {
     120_000,
   );
 });
+
+// ---- Segments that start mid-file, and one segment used by two clips ----
+
+/** 12 s, 320x180: red 0–4 s, green 4–8 s, blue 8–12 s (one file, like an ag-go asset). */
+async function createColourBands(outputPath: string): Promise<void> {
+  await execFileAsync(FFMPEG, [
+    '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=25:d=4',
+    '-f', 'lavfi', '-i', 'color=c=green:s=320x180:r=25:d=4',
+    '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=25:d=4',
+    '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]', '-map', '[v]',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-y', outputPath,
+  ], { timeout: 30_000 });
+}
+
+/** Mean colour of the frame at `t` as [r, g, b]. */
+async function colourAt(videoPath: string, t: number): Promise<[number, number, number]> {
+  const out = execFileSync(FFMPEG, ['-v', 'error', '-ss', String(t), '-i', videoPath, '-frames:v', '1', '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { timeout: 20_000 });
+  return [out[0]!, out[1]!, out[2]!];
+}
+const dominant = (c: [number, number, number]) => (['red', 'green', 'blue'] as const)[c.indexOf(Math.max(...c))];
+
+describe('studio.render_* cuts footage where ag-go says it is (whole-file URLs)', () => {
+  test(
+    'mid-file segments and two clips of one segment each get their own, correct cut',
+    async () => {
+      try { await execFileAsync(FFMPEG, ['-version'], { timeout: 5000 }); } catch { console.log('ffmpeg not available, skipping'); return; }
+      const dir = join(tmpdir(), `render-span-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      const bands = join(dir, 'bands.mp4');
+      await createColourBands(bands);
+      const wavPath = join(dir, 'L001.wav');
+      const n = 24000 * 3;
+      const wav = Buffer.alloc(44 + n * 2);
+      wav.write('RIFF', 0); wav.writeUInt32LE(36 + n * 2, 4); wav.write('WAVE', 8); wav.write('fmt ', 12);
+      wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28);
+      wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(n * 2, 40);
+      writeFileSync(wavPath, wav);
+
+      const sign = new FakeSignClient();
+      const store = new FakeUploadStore();
+      // both inputs resolve to the SAME whole file; the spans say where each segment is
+      sign.register('segment:seg-rg', bands, { start_ms: 2000, end_ms: 6000 });
+      sign.register('segment:seg-b', bands, { start_ms: 8000, end_ms: 12000 });
+      sign.register('stage:tts/L001.wav', wavPath);
+      const clip = (order: number, input: string, inS: number, outS: number) => ({
+        order, source_id: 'src_01ABCDEFGHJKMNPQRSTVWXYZ1' + String(order), source_path: input, in: inS, out: outS,
+        start: order, end: order + 1, fit: 'scale_pad', has_audio: false,
+        transition_out: { kind: 'cut', seconds: 0, tail_available: false },
+      });
+      const comp = {
+        ...buildTestComposition(bands, wavPath, 'renders/2/preview.mp4', { width: 320, height: 180 }),
+        segments: [
+          clip(0, 'segment:seg-b', 8.5, 9.5),   // mid-file: blue
+          clip(1, 'segment:seg-rg', 2.5, 3.5),  // red
+          clip(2, 'segment:seg-rg', 4.5, 5.5),  // same input, same length, green
+        ],
+      };
+      // the segment's source_id is shared by clips 1 and 2 in a real Studio composition
+      comp.segments[2]!.source_id = comp.segments[1]!.source_id;
+      const workDir = join(dir, 'work');
+      mkdirSync(workDir, { recursive: true });
+      const compPath = join(workDir, 'composition.json');
+      writeFileSync(compPath, JSON.stringify(comp), 'utf8');
+      sign.register('stage:composition.json', compPath);
+      const payload = { production_id: 'prod-test', revision: 2, composition: 'stage:composition.json', canvas: { width: 320, height: 180 }, handle_seconds: 0.5, output: 'renders/2/preview.mp4' };
+      const ctx = {
+        job: { id: 'job-span', type: 'studio.render_preview', attempt: 1, ticket: 't', lease_token: 'l', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: {} as unknown,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function () { return this; } },
+        signal: new AbortController().signal, progress: () => {},
+        download: store.makeDownload(sign), upload: store.makeUpload(), uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await makeStudioRenderPreviewHandler({})(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      const video = store.uploaded.get('renders/2/preview.mp4');
+      expect(video).toBeTruthy();
+      const probe = await probeVideo(video!.localPath);
+      expect(probe.duration).toBeGreaterThan(2.8);
+      expect(probe.duration).toBeLessThan(3.3);
+      expect(dominant(await colourAt(video!.localPath, 0.5))).toBe('blue');
+      expect(dominant(await colourAt(video!.localPath, 1.5))).toBe('red');
+      expect(dominant(await colourAt(video!.localPath, 2.5))).toBe('green');
+    },
+    120_000,
+  );
+
+  test('clipSourceId is a valid, per-clip, stable source id', async () => {
+    const { clipSourceId } = await import('../render-handler.js');
+    const a = clipSourceId('src_01ABCDEFGHJKMNPQRSTVWXYZ12', 1);
+    expect(a).toMatch(/^src_[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+    expect(clipSourceId('src_01ABCDEFGHJKMNPQRSTVWXYZ12', 1)).toBe(a);
+    expect(clipSourceId('src_01ABCDEFGHJKMNPQRSTVWXYZ12', 2)).not.toBe(a);
+  });
+});
+

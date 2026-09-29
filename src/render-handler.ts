@@ -4,6 +4,7 @@
  * → ghi đè path → gọi renderComposition → upload output + render.json.
  */
 import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import {
   StudioRenderPayloadSchema,
@@ -27,6 +28,16 @@ import type { RenderWorkerExtra } from './config.js';
 import { createRequire } from 'node:module';
 
 const _require = createRequire(import.meta.url);
+
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** A `src_<ULID>`-shaped id unique to one clip of the composition, stable for the same input. */
+export function clipSourceId(sourceId: string, index: number): string {
+  const bytes = createHash('sha256').update(`${sourceId}#${index}`).digest();
+  let id = CROCKFORD[bytes[0]! % 8]!;
+  for (let i = 1; i < 26; i++) id += CROCKFORD[bytes[i]! % 32]!;
+  return `src_${id}`;
+}
 
 // ---- Cache mezzanine đơn giản (dựa trên file system) ----
 
@@ -105,57 +116,50 @@ async function handleStudioRender(
 
   ctx.progress(8, 'sign_segments');
 
-  // 4. Sign và cắt đoạn nguồn
-  // Sign tất cả segments trong một batch
+  // 4. Sign và cắt đoạn nguồn.
+  //
+  // `resolve` của ag-go trả URL của CẢ file (gốc, proxy hoặc preview) kèm `start_ms`/`end_ms` cho biết đoạn nằm
+  // ở đâu trong file. Vì vậy `seg.in`/`seg.out` là vị trí trong file, và phần dư hai đầu được phép vượt ra ngoài
+  // đoạn (phần đó vẫn là hình của file): chỉ kẹp ở 0, cuối file để ffmpeg tự dừng. Mỗi clip của composition có
+  // mezzanine riêng, vì hai clip có thể dùng cùng một `segment:<id>` ở hai khoảng khác nhau.
+  const segmentLocal = new Map<number, string>();
   if (segmentInputs.length > 0) {
     const signOps = segmentInputs.map((name) => ({ op: 'get' as const, input: name }));
     const signResults: SignResult[] = await ctx.sign.sign(signOps);
 
-    const mezzsDir = join(workDir, 'mezzs');
-    mkdirSync(mezzsDir, { recursive: true });
-
+    const urlByInput = new Map<string, string>();
     for (let i = 0; i < segmentInputs.length; i++) {
       const inputName = segmentInputs[i]!;
       const signResult = signResults[i];
-
       if (!signResult || signResult.op !== 'get') {
         throw new Error(`Unexpected sign result for ${inputName}`);
       }
+      urlByInput.set(inputName, signResult.url);
+      sourceMetas.set(inputName, {
+        source_kind: signResult.source?.source_kind ?? 'preview',
+        watermarked: signResult.source?.watermarked ?? true,
+      });
+    }
 
-      const sourceUrl = signResult.url;
-      const sourceMeta = signResult.source;
-      const sourceKind = sourceMeta?.source_kind ?? 'preview';
-      const watermarked = sourceMeta?.watermarked ?? true;
+    const mezzsDir = join(workDir, 'mezzs');
+    mkdirSync(mezzsDir, { recursive: true });
 
-      sourceMetas.set(inputName, { source_kind: sourceKind, watermarked });
+    const segmentClips = composition.segments
+      .map((seg, index) => ({ seg, index }))
+      .filter(({ seg }) => seg.source_path.startsWith('segment:'));
+    for (let n = 0; n < segmentClips.length; n++) {
+      const { seg, index } = segmentClips[n]!;
+      const sourceUrl = urlByInput.get(seg.source_path);
+      if (!sourceUrl) throw new Error(`No signed URL for ${seg.source_path}`);
 
-      // Tìm segment dùng input này để lấy in/out
-      const seg = composition.segments.find((s) => s.source_path === inputName);
-      if (!seg) {
-        // Input được khai nhưng không có segment dùng nó - bỏ qua
-        continue;
+      const rangeCut = computeRangeCut(seg.in, seg.out, handleSeconds, null);
+      if (rangeCut.cutDuration <= 0) {
+        throw new NonRetryableError('invalid_composition', `Segment ${index} (${seg.source_path}) has an empty range ${seg.in}–${seg.out}`);
       }
-
-      // Thời lượng từ source metadata nếu có
-      const sourceStartMs = sourceMeta?.start_ms ?? null;
-      const sourceEndMs = sourceMeta?.end_ms ?? null;
-      const sourceDurationSeconds =
-        sourceStartMs !== null && sourceEndMs !== null
-          ? (sourceEndMs - sourceStartMs) / 1000
-          : null;
-
-      // Tính khoảng cắt
-      const rangeCut = computeRangeCut(
-        seg.in,
-        seg.out,
-        handleSeconds,
-        sourceDurationSeconds,
-      );
-
-      // Cắt thành file cục bộ
-      const mezzPath = join(mezzsDir, `${inputName.replace(/[^a-zA-Z0-9]/g, '_')}.mp4`);
+      const mezzPath = join(mezzsDir, `clip-${String(index).padStart(4, '0')}.mp4`);
       log.info('Cutting segment', {
-        input: inputName,
+        input: seg.source_path,
+        order: seg.order,
         sourceStart: rangeCut.sourceStart,
         duration: rangeCut.cutDuration,
         quality: isPreview ? 'preview' : 'final',
@@ -169,14 +173,13 @@ async function handleStudioRender(
         signal: ctx.signal,
       });
 
-      inputToLocal.set(inputName, mezzPath);
-
-      // Rewrite segment in/out to be relative to the cut file
+      segmentLocal.set(index, mezzPath);
+      // in/out now count from the start of this clip's own cut
       (seg as typeof seg & { in: number; out: number }).in = rangeCut.localIn;
       (seg as typeof seg & { in: number; out: number }).out = rangeCut.localOut;
 
       ctx.progress(
-        8 + Math.round(40 * ((i + 1) / segmentInputs.length)),
+        8 + Math.round(40 * ((n + 1) / segmentClips.length)),
         'cut_segments',
       );
     }
@@ -210,6 +213,13 @@ async function handleStudioRender(
 
   // 6. Ghi đè đường dẫn composition
   const localComposition = rewriteCompositionPaths(composition, inputToLocal);
+  // Footage clips point at their own mezzanine (a name -> path map cannot tell two clips of one segment apart)
+  // and get their own source id: renderComposition keys its mezzanine cache by source + in/out, and two cuts
+  // of one segment of equal length have identical local in/out.
+  localComposition.segments = localComposition.segments.map((seg, index) => {
+    const local = segmentLocal.get(index);
+    return local ? { ...seg, source_path: local, source_id: clipSourceId(seg.source_id, index) } : seg;
+  });
 
   // 7. Chuẩn bị renderComposition
   const outDir = join(workDir, 'render_out');
