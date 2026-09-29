@@ -16,7 +16,7 @@ import type { JobResult, SignResult } from '@ag-farm/protocol';
 import type { JobContext } from '@ag-farm/worker-sdk';
 import { NonRetryableError } from '@ag-farm/worker-sdk';
 import type { RenderDeps, RenderInput } from '@ag-studio/render';
-import { renderComposition, probeNvenc, CompositionSchema } from '@ag-studio/render';
+import { renderComposition, probeNvenc, CompositionSchema, studioOverlayAss } from '@ag-studio/render';
 import type { Composition } from './composition-utils.js';
 import {
   collectCompositionInputs,
@@ -25,6 +25,7 @@ import {
 } from './composition-utils.js';
 import { probeMedia, cutSegmentToMezz, resolveFfmpeg, resolveFfprobe } from './ffmpeg-utils.js';
 import type { RenderWorkerExtra } from './config.js';
+import { ArialMissingError, prepareArialDir } from './fonts.js';
 import { createRequire } from 'node:module';
 
 const _require = createRequire(import.meta.url);
@@ -273,13 +274,28 @@ async function handleStudioRender(
     log: (line: string) => log.info(line),
   };
 
-  const assPath: string | null = null; // ASS không được tạo ở đây; composition.captions đã có cues
+  // Chữ (track T) và phụ đề: dựng overlay.ass từ composition, font Arial lấy từ máy này (xem fonts.ts).
+  let assPath: string | null = null;
+  let fontsDir: string | null = null;
+  const ass = studioOverlayAss(localComposition as unknown as import('@ag-studio/render').Composition);
+  if (ass !== null) {
+    try {
+      fontsDir = prepareArialDir(join(workDir, 'fonts'), extra.fonts_dir);
+    } catch (e) {
+      if (e instanceof ArialMissingError) throw new NonRetryableError('fonts_missing', e.message);
+      throw e;
+    }
+    assPath = join(workDir, 'overlay.ass');
+    writeFileSync(assPath, ass, 'utf8');
+    log.info('Burning text and subtitles', { fonts_dir: fontsDir });
+  }
 
   const renderInput: RenderInput = {
     composition: localComposition as unknown as import('@ag-studio/render').RenderInput['composition'],
     assPath,
+    fontsDir,
     outDir,
-    encoderCfg: 'cpu',  // không có NVIDIA GPU
+    encoderCfg: extra.encoder ?? 'auto',
     timeoutSeconds: ffmpegTimeoutMs / 1000,
     sourceChecksums,
   };

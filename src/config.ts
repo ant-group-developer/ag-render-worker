@@ -13,6 +13,10 @@ export interface RenderWorkerExtra {
   ollama_url?: string;
   /** Timeout (giây) cho mỗi lệnh ffmpeg. Mặc định: 3600. */
   ffmpeg_timeout_s?: number;
+  /** Thư mục chứa arial.ttf. Mặc định: thư mục font của hệ điều hành (xem fonts.ts). */
+  fonts_dir?: string;
+  /** Encoder cho render: 'auto' (NVENC nếu có, không thì CPU), 'nvenc' hoặc 'cpu'. Mặc định: 'auto'. */
+  encoder?: 'auto' | 'nvenc' | 'cpu';
 }
 
 export function getExtra(extra: Record<string, unknown> | undefined): RenderWorkerExtra {
@@ -28,5 +32,10 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
     ollama_url: typeof extra['ollama_url'] === 'string' ? extra['ollama_url'] : undefined,
     ffmpeg_timeout_s:
       typeof extra['ffmpeg_timeout_s'] === 'number' ? extra['ffmpeg_timeout_s'] : undefined,
+    fonts_dir: typeof extra['fonts_dir'] === 'string' ? extra['fonts_dir'] : undefined,
+    encoder:
+      extra['encoder'] === 'auto' || extra['encoder'] === 'nvenc' || extra['encoder'] === 'cpu'
+        ? extra['encoder']
+        : undefined,
   };
 }

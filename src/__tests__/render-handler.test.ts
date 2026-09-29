@@ -457,3 +457,97 @@ describe('studio.render_* cuts footage where ag-go says it is (whole-file URLs)'
   });
 });
 
+
+// ---- Text and subtitles burnt in with Arial ----
+
+/** Mean colour of a region of the frame at `t` (crop given as ffmpeg expressions). */
+async function regionColourAt(videoPath: string, t: number, crop: string): Promise<[number, number, number]> {
+  const out = execFileSync(FFMPEG, ['-v', 'error', '-ss', String(t), '-i', videoPath, '-frames:v', '1', '-vf', `crop=${crop},scale=1:1`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { timeout: 20_000 });
+  return [out[0]!, out[1]!, out[2]!];
+}
+
+describe('studio.render_* burns text and subtitles in Arial', () => {
+  const CANVAS = { width: 640, height: 360 };
+  let dir: string;
+  let blue: string;
+  let wavPath: string;
+  let ffmpegOk = true;
+
+  beforeAll(async () => {
+    try { await execFileAsync(FFMPEG, ['-version'], { timeout: 5000 }); } catch { ffmpegOk = false; return; }
+    dir = join(tmpdir(), `render-text-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true });
+    blue = join(dir, 'blue.mp4');
+    await execFileAsync(FFMPEG, ['-f', 'lavfi', '-i', 'color=c=blue:s=640x360:r=25:d=4', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-y', blue], { timeout: 30_000 });
+    wavPath = join(dir, 'L001.wav');
+    const n = 24000 * 3;
+    const wav = Buffer.alloc(44 + n * 2);
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + n * 2, 4); wav.write('WAVE', 8); wav.write('fmt ', 12);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28);
+    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(n * 2, 40);
+    writeFileSync(wavPath, wav);
+  }, 60_000);
+
+  async function render(withText: boolean, extra: Record<string, unknown> = {}): Promise<string> {
+    const sign = new FakeSignClient();
+    const store = new FakeUploadStore();
+    sign.register('segment:seg-001', blue, { start_ms: 0, end_ms: 4000 });
+    sign.register('stage:tts/L001.wav', wavPath);
+    const comp = {
+      ...buildTestComposition(blue, wavPath, 'renders/3/preview.mp4', CANVAS),
+      segments: buildTestComposition(blue, wavPath, 'renders/3/preview.mp4', CANVAS).segments.map((x) => ({ ...x, has_audio: false })),
+      captions: withText
+        ? { mode: 'burn-in', cues: [{ index: 1, start: 0, end: 3, lines: ['PHỞ BÒ HÀ NỘI MMMMMMMMMMMMMM'], raise_px: 0, words: [] }] }
+        : { mode: 'none', cues: [] },
+      text_events: withText
+        ? [{ id: 'T001', kind: 'title', text: 'TIÊU ĐỀ MMMMMMMM', start: 0, end: 3, position: 'top_left', animation: 'none' }]
+        : [],
+    };
+    const workDir = join(dir, `work-${randomUUID()}`);
+    mkdirSync(workDir, { recursive: true });
+    const compPath = join(workDir, 'composition.json');
+    writeFileSync(compPath, JSON.stringify(comp), 'utf8');
+    sign.register('stage:composition.json', compPath);
+    const payload = { production_id: 'prod-test', revision: 3, composition: 'stage:composition.json', canvas: CANVAS, handle_seconds: 0.5, output: 'renders/3/preview.mp4' };
+    const ctx = {
+      job: { id: 'job-text', type: 'studio.render_preview', attempt: 1, ticket: 't', lease_token: 'l', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+      payload, workDir, sign, cache: {} as unknown,
+      log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function () { return this; } },
+      signal: new AbortController().signal, progress: () => {},
+      download: store.makeDownload(sign), upload: store.makeUpload(), uploadJson: store.makeUploadJson(),
+    };
+    const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+    await makeStudioRenderPreviewHandler(extra)(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+    if (withText) expect(existsSync(join(workDir, 'overlay.ass'))).toBe(true);
+    return store.uploaded.get('renders/3/preview.mp4')!.localPath;
+  }
+
+  test(
+    'subtitle cues and titles show up as light pixels over the footage',
+    async () => {
+      if (!ffmpegOk) { console.log('ffmpeg not available, skipping'); return; }
+      const { findArialFiles } = await import('../fonts.js');
+      if (findArialFiles().length === 0) { console.log('Arial not installed here, skipping'); return; }
+      const plain = await render(false);
+      const texted = await render(true);
+      const subtitleBand = 'iw*3/4:ih/5:iw/8:ih*4/5';
+      const titleCorner = 'iw/2:ih/4:0:0';
+      // blue footage has almost no red; white Arial text adds it where it is drawn
+      const redGain = async (crop: string) => (await regionColourAt(texted, 1.5, crop))[0] - (await regionColourAt(plain, 1.5, crop))[0];
+      expect(await redGain(subtitleBand)).toBeGreaterThan(8);
+      expect(await redGain(titleCorner)).toBeGreaterThan(8);
+    },
+    180_000,
+  );
+
+  test(
+    'a machine without Arial fails the job for good, naming the fix',
+    async () => {
+      if (!ffmpegOk) { console.log('ffmpeg not available, skipping'); return; }
+      const empty = join(dir, 'no-fonts');
+      mkdirSync(empty, { recursive: true });
+      await expect(render(true, { fonts_dir: empty })).rejects.toMatchObject({ code: 'fonts_missing' });
+    },
+    120_000,
+  );
+});
