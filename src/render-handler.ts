@@ -15,7 +15,7 @@ import type { JobResult, SignResult } from '@ag-farm/protocol';
 import type { JobContext } from '@ag-farm/worker-sdk';
 import { NonRetryableError } from '@ag-farm/worker-sdk';
 import type { RenderDeps, RenderInput } from '@ag-studio/render';
-import { renderComposition, probeNvenc } from '@ag-studio/render';
+import { renderComposition, probeNvenc, CompositionSchema } from '@ag-studio/render';
 import type { Composition } from './composition-utils.js';
 import {
   collectCompositionInputs,
@@ -71,9 +71,15 @@ async function handleStudioRender(
   await ctx.download(payload.composition, compositionPath);
 
   const { readFileSync } = await import('node:fs');
-  const composition = JSON.parse(readFileSync(compositionPath, 'utf8')) as Composition;
-  // Ensure required defaults that @harness/contracts schema would supply
-  if (!Array.isArray(composition.text_dropped)) composition.text_dropped = [];
+  const rawJson = JSON.parse(readFileSync(compositionPath, 'utf8'));
+  const compositionResult = CompositionSchema.safeParse(rawJson);
+  if (!compositionResult.success) {
+    throw new NonRetryableError(
+      'invalid_composition',
+      `Composition JSON is invalid: ${compositionResult.error.message}`,
+    );
+  }
+  const composition = compositionResult.data as unknown as Composition;
 
   ctx.progress(5, 'collect_inputs');
 

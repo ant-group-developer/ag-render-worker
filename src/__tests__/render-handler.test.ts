@@ -177,18 +177,20 @@ function buildTestComposition(
   outputPath: string,
   canvas: { width: number; height: number },
 ) {
+  // Use valid schema values: schema_version matches harness.composition/v1,
+  // request_id and source_id match their respective idSchema patterns.
   return {
-    schema_version: 'composition/v1',
+    schema_version: 'harness.composition/v1',
     output: { width: canvas.width, height: canvas.height, fps: 25, codec: 'h264' },
     voice: 'tts',
     language: 'vi',
     total_seconds: 3,
-    request_id: 'cr_test_001',
+    request_id: 'req_01ABCDEFGHJKMNPQRSTVWXYZ12',
     brand: null,
     segments: [
       {
         order: 0,
-        source_id: 'src-001',
+        source_id: 'src_01ABCDEFGHJKMNPQRSTVWXYZ12',
         source_path: 'segment:seg-001',
         in: 0.5,
         out: 3.5,
