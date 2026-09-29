@@ -1,0 +1,34 @@
+# Cấu hình ag-render-worker. Sao chép thành config.yaml (cạnh package.json) rồi sửa.
+# Đường dẫn Windows viết trong nháy đơn để khỏi phải escape dấu \.
+
+# URL của ag-farm hub (API, không phải web quản lý)
+hub_url: https://farm-api.example.com
+# Token node: tạo trên web quản lý ag-farm (trang Máy), chỉ hiện một lần
+token: 'DAN_TOKEN_NODE_VAO_DAY'
+# Tên hiển thị trên trang Máy
+name: gpu-01-render
+kinds:
+  - studio.tts
+  - studio.render_preview
+  - studio.render_final
+work_dir: 'D:\ag-farm\render\work'
+cache:
+  dir: 'D:\ag-farm\render\cache'
+  max_gb: 100
+# Mặc định C:\ProgramData\ag-farm\machine.yaml (dùng chung với ag-scan-worker trên cùng máy)
+# machine_file: 'C:\ProgramData\ag-farm\machine.yaml'
+
+# Lịch chạy (bỏ trống = 24/7)
+# schedule:
+#   - { days: [1, 2, 3, 4, 5], from: '19:00', to: '07:00' }
+
+extra:
+  # Python trong venv đã cài torch + OmniVoice (deploy/setup-python.ps1)
+  python_bin: 'D:\ag-farm\venv\Scripts\python.exe'
+  # Máy chạy cả ag-scan-worker: nhả model Ollama khỏi VRAM trước khi TTS
+  unload_ollama_before_tts: true
+  ollama_url: http://localhost:11434
+  # auto = NVENC nếu có, không thì CPU
+  encoder: auto
+  # Thư mục chứa arial.ttf (mặc định C:\Windows\Fonts)
+  # fonts_dir: 'C:\Windows\Fonts'
