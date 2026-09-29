@@ -1,0 +1,11 @@
+# Install torch FIRST, from the PyTorch CUDA index, so the resolver below never pulls the CPU-only build:
+#   pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+# Ranges below are the ones verified end to end on the build machine (task 11, RTX 3060, Windows 11,
+# Python 3.11.15, torch 2.8.0+cu126): omnivoice 0.2.1, whisperx 3.7.4 -- which brought faster-whisper 1.2.1,
+# ctranslate2 4.8.2, transformers 5.17.0, pyannote.audio 3.4.0, numpy 2.0.2 -- all in ONE venv, with torch
+# left untouched by the resolver. Upper bounds are the next major only; see docs/runbooks/studio-media.md
+# for what to check when you move past them.
+omnivoice>=0.2.1,<0.3
+whisperx>=3.7.4,<4
+soundfile>=0.13,<1
+numpy>=1.26,<3

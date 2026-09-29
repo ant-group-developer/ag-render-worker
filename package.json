@@ -1,0 +1,40 @@
+{
+  "name": "@ag-farm/ag-render-worker",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Worker dựng video (studio.tts, studio.render_preview, studio.render_final) cho máy cấu hình cao",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "bundle": "node bundle.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "start": "node dist/main.js"
+  },
+  "resolutions": {
+    "@ag-farm/protocol": "link:../ag-farm/packages/protocol",
+    "@ag-farm/worker-sdk": "link:../ag-farm/packages/worker-sdk",
+    "@ag-studio/render": "link:../ag-studio/packages/render",
+    "@harness/core": "link:../ag-studio/packages/core",
+    "@harness/contracts": "link:../ag-studio/packages/contracts"
+  },
+  "dependencies": {
+    "@ag-farm/protocol": "link:../ag-farm/packages/protocol",
+    "@ag-farm/worker-sdk": "link:../ag-farm/packages/worker-sdk",
+    "@ag-studio/render": "link:../ag-studio/packages/render",
+    "@harness/core": "link:../ag-studio/packages/core",
+    "@harness/contracts": "link:../ag-studio/packages/contracts",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "yaml": "^2.6.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.0",
+    "typescript": "^5.6.0"
+  }
+}
