@@ -123,6 +123,8 @@ export interface CutOptions {
   timeoutMs?: number;
   /** AbortSignal để huỷ. */
   signal?: AbortSignal;
+  /** `nvenc` khi máy có NVENC (nhanh hơn nhiều ở 4K), mặc định `cpu`. */
+  encoder?: 'nvenc' | 'cpu';
 }
 
 /**
@@ -163,16 +165,19 @@ export async function cutSegmentToMezz(
     vfParts.push("scale='if(gt(iw,ih),min(iw,1280),-2)':'if(gt(iw,ih),-2,min(ih,1280))'");
   }
 
-  const crf = quality === 'preview' ? '26' : '18';
-  const preset = quality === 'preview' ? 'fast' : 'slow';
+  // Bản cắt chỉ là trung gian: renderComposition còn scale/encode lại nó thành mezzanine, nên không cần
+  // `-preset slow` (trước đây 40-60 s cho mỗi đoạn 4-5 s ở 4K trên CPU).
+  const quality18 = quality === 'preview' ? '26' : '18';
+  const videoCodec =
+    opts.encoder === 'nvenc'
+      ? ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', quality18, '-b:v', '0']
+      : ['-c:v', 'libx264', '-crf', quality18, '-preset', 'veryfast'];
 
   const args: string[] = [
     '-ss', String(startSeconds),
     '-i', sourcePath,
     '-t', String(durationSeconds),
-    '-c:v', 'libx264',
-    '-crf', crf,
-    '-preset', preset,
+    ...videoCodec,
     ...(vfParts.length > 0 ? ['-vf', vfParts.join(',')] : []),
     '-c:a', 'aac',
     '-ac', '2',

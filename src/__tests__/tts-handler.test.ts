@@ -116,6 +116,8 @@ function makeFakeCtx(workDir: string, store: FakeStore): JobContext {
     } as unknown as JobContext['log'],
     signal: new AbortController().signal,
     progress: () => {},
+    shouldYield: () => false,
+    yieldToInteractive: async () => {},
     download: store.makeDownload(),
     upload: store.makeUpload(),
     uploadJson: store.makeUploadJson(),

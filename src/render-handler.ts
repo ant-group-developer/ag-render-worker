@@ -42,9 +42,9 @@ export function clipSourceId(sourceId: string, index: number): string {
 
 // ---- Cache mezzanine đơn giản (dựa trên file system) ----
 
-function makeMezzCache(cacheDir: string): import('@ag-studio/render').RenderDeps['cache'] {
-  // MezzCache interface: { dir: string, max_bytes: number }
-  return { dir: cacheDir, max_bytes: 20 * 1024 * 1024 * 1024 } as unknown as import('@ag-studio/render').RenderDeps['cache'];
+function makeMezzCache(cacheDir: string): RenderDeps['cache'] {
+  // `maxBytes` (trước đây ghi nhầm `max_bytes`: giới hạn thành undefined và mỗi lần quét cache xoá sạch).
+  return { dir: cacheDir, maxBytes: 20 * 1024 * 1024 * 1024 };
 }
 
 // ---- Handler chính ----
@@ -145,6 +145,10 @@ async function handleStudioRender(
     const mezzsDir = join(workDir, 'mezzs');
     mkdirSync(mezzsDir, { recursive: true });
 
+    // Cắt bằng NVENC khi có (trừ khi config ép `cpu`): cắt 4K bằng libx264 là bước chậm nhất của render.
+    let cutEncoder: 'nvenc' | 'cpu' =
+      extra.encoder !== 'cpu' && (await probeNvenc(ffmpeg).catch(() => false)) ? 'nvenc' : 'cpu';
+
     const segmentClips = composition.segments
       .map((seg, index) => ({ seg, index }))
       .filter(({ seg }) => seg.source_path.startsWith('segment:'));
@@ -166,13 +170,22 @@ async function handleStudioRender(
         quality: isPreview ? 'preview' : 'final',
       });
 
-      await cutSegmentToMezz(sourceUrl, mezzPath, {
+      const cutOpts = {
         startSeconds: rangeCut.sourceStart,
         durationSeconds: rangeCut.cutDuration,
-        quality: isPreview ? 'preview' : 'final',
+        quality: isPreview ? ('preview' as const) : ('final' as const),
         timeoutMs: ffmpegTimeoutMs,
         signal: ctx.signal,
-      });
+      };
+      try {
+        await cutSegmentToMezz(sourceUrl, mezzPath, { ...cutOpts, encoder: cutEncoder });
+      } catch (e) {
+        if (cutEncoder !== 'nvenc' || ctx.signal.aborted) throw e;
+        // NVENC hỏng giữa chừng (driver, hết phiên encode): cả job chuyển sang CPU, như renderComposition.
+        log.warn('NVENC cut failed, falling back to cpu for the rest of this job', { error: String(e) });
+        cutEncoder = 'cpu';
+        await cutSegmentToMezz(sourceUrl, mezzPath, { ...cutOpts, encoder: cutEncoder });
+      }
 
       segmentLocal.set(index, mezzPath);
       // in/out now count from the start of this clip's own cut
@@ -298,6 +311,10 @@ async function handleStudioRender(
     encoderCfg: extra.encoder ?? 'auto',
     timeoutSeconds: ffmpegTimeoutMs / 1000,
     sourceChecksums,
+    // Huỷ / mất lease thì dừng ffmpeg ngay, không encode tiếp hàng phút cho một job đã bỏ.
+    signal: ctx.signal,
+    // 0-100 của renderComposition nằm trong khoảng 65-89 của cả job (SDK tự gộp các lần báo dày).
+    onProgress: (percent, stage) => ctx.progress(65 + Math.round(percent * 0.24), `render_${stage}`),
   };
 
   ctx.progress(65, 'render');

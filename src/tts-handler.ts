@@ -146,7 +146,7 @@ export function makeStudioTtsHandler(
       });
 
     log.info('Running TTS engine', { lines: payload.lines.length });
-    const runResult = await runner(engineJob, ttsDir);
+    const runResult = await runner(engineJob, ttsDir, ctx.signal);
 
     if (runResult.kind !== 'ok') {
       const retryable = runResult.kind === 'transient';

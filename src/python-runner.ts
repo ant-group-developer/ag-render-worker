@@ -57,6 +57,8 @@ type PythonRunResult =
 export type PythonRunner = (
   job: TtsEngineJob,
   outDir: string,
+  /** Huỷ job (mất lease, bị cancel): tiến trình Python bị kill ngay. */
+  signal?: AbortSignal,
 ) => Promise<PythonRunResult>;
 
 /**
@@ -75,7 +77,8 @@ function pythonEnv(): NodeJS.ProcessEnv {
  * Tạo runner thật: spawn python tts.py với job/result JSON files.
  */
 export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
-  return async (job: TtsEngineJob, outDir: string): Promise<PythonRunResult> => {
+  return async (job: TtsEngineJob, outDir: string, signal?: AbortSignal): Promise<PythonRunResult> => {
+    if (signal?.aborted) return { kind: 'transient', reason: 'aborted before start' };
     const id = randomUUID();
     const jobPath = join(outDir, `engine-job-${id}.json`);
     const resultPath = join(outDir, `engine-result-${id}.json`);
@@ -87,6 +90,7 @@ export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
     if (opts.dryRun) args.push('--dry-run');
 
     let stderrTail = '';
+    let aborted = false;
     const outcome = await new Promise<{ code: number | null; timedOut: boolean; spawnError: Error | null }>(
       (resolve) => {
         let settled = false;
@@ -99,10 +103,16 @@ export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
           timedOut = true;
           try { child.kill('SIGKILL'); } catch { /* ignore */ }
         }, opts.timeoutMs);
+        const onAbort = () => {
+          aborted = true;
+          try { child.kill('SIGKILL'); } catch { /* ignore */ }
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
         const settle = (r: { code: number | null; timedOut: boolean; spawnError: Error | null }) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
           resolve(r);
         };
         child.stdout?.resume();
@@ -122,6 +132,10 @@ export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
     if (outcome.spawnError) {
       cleanup();
       return { kind: 'transient', reason: `failed to start python: ${outcome.spawnError.message}` };
+    }
+    if (aborted) {
+      cleanup();
+      return { kind: 'transient', reason: 'aborted' };
     }
     if (outcome.timedOut) {
       cleanup();
