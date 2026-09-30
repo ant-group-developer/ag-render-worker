@@ -27,37 +27,6 @@ const NATIVE = ['ffmpeg-static', 'ffprobe-static'];
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, 'dist'), { recursive: true });
 
-// Plugin: stub the schemas removed from @harness/contracts so that
-// @harness/core/dist/studio/validate.js and studio-checkers.js can be
-// bundled.  The worker never calls validateSelection/Treatment/Narration;
-// the stubs only need to be importable without crashing.
-const harnessContractsShimPlugin = {
-  name: 'harness-contracts-shim',
-  setup(build) {
-    build.onResolve({ filter: /^@harness\/contracts$/ }, () => ({
-      namespace: 'harness-contracts-shim',
-      path: '@harness/contracts',
-    }));
-    build.onLoad({ filter: /.*/, namespace: 'harness-contracts-shim' }, () => {
-      // Re-export everything from the real package (resolved from the worker's
-      // node_modules) then add the missing stubs.
-      const realPath = join(root, 'node_modules', '@harness', 'contracts', 'dist', 'index.js');
-      return {
-        contents: `
-export * from ${JSON.stringify(realPath)};
-const _stub = { safeParse: () => ({ success: false, error: { issues: [] } }), parse: () => { throw new Error('stub schema'); } };
-export const SelectionSchema = _stub;
-export const TreatmentSchema = _stub;
-export const StudioNarrationSchema = _stub;
-export const TimelineV2Schema = _stub;
-`,
-        loader: 'js',
-        resolveDir: root,
-      };
-    });
-  },
-};
-
 await build({
   entryPoints: [join(root, 'src', 'main.ts')],
   bundle: true,
@@ -66,7 +35,6 @@ await build({
   format: 'esm',
   outfile: join(out, 'dist', 'worker.mjs'),
   external: NATIVE,
-  plugins: [harnessContractsShimPlugin],
   // Thư viện CommonJS trong bundle ESM vẫn gọi require().
   banner: { js: "import { createRequire as __agCreateRequire } from 'node:module'; const require = __agCreateRequire(import.meta.url);" },
   logLevel: 'warning',

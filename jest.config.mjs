@@ -23,9 +23,6 @@ export default {
     ],
   },
   moduleNameMapper: {
-    // Stub @harness/contracts to add symbols removed from the dist
-    // (SelectionSchema etc.) so @harness/core can be imported in tests.
-    '^@harness/contracts$': '<rootDir>/__tests__/__mocks__/harness-contracts.js',
     // Map .js extensions back to .ts sources (ESM import style).
     // Exclude paths that go through node_modules (they're real .js files).
     '^(\\.{1,2}/(?!.*node_modules).*)\\.js$': '$1',
