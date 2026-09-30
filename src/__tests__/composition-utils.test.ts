@@ -1,7 +1,7 @@
 /**
  * Test: thu thập input, ghi đè path, range-cut math.
  */
-import { collectCompositionInputs, rewriteCompositionPaths, computeRangeCut } from '../composition-utils.js';
+import { collectCompositionInputs, rewriteCompositionPaths } from '../composition-utils.js';
 import type { Composition } from '../composition-utils.js';
 
 // ---- Fixture composition ----
@@ -182,59 +182,3 @@ describe('rewriteCompositionPaths', () => {
   });
 });
 
-// ---- computeRangeCut ----
-
-describe('computeRangeCut', () => {
-  test('basic range cut with handles', () => {
-    const cut = computeRangeCut(5, 10, 1);
-    expect(cut.sourceStart).toBe(4);         // 5 - 1
-    expect(cut.cutDuration).toBe(7);         // (10 + 1) - 4
-    expect(cut.localIn).toBe(1);             // 5 - 4
-    expect(cut.localOut).toBe(6);            // 10 - 4
-  });
-
-  test('start clamped at 0 when handle would go negative', () => {
-    const cut = computeRangeCut(0.5, 5, 1);
-    expect(cut.sourceStart).toBe(0);         // clamped: max(0, 0.5-1)
-    expect(cut.localIn).toBe(0.5);           // 0.5 - 0
-    expect(cut.localOut).toBe(5);            // 5 - 0
-    expect(cut.cutDuration).toBe(6);         // (5 + 1) - 0
-  });
-
-  test('end clamped at source duration', () => {
-    const cut = computeRangeCut(8, 12, 1, 13);
-    expect(cut.sourceStart).toBe(7);         // 8 - 1
-    expect(cut.cutDuration).toBe(6);         // min(12+1, 13) - 7 = 13-7
-    expect(cut.localIn).toBe(1);             // 8 - 7
-    expect(cut.localOut).toBe(5);            // 12 - 7
-  });
-
-  test('no source duration = no end clamp', () => {
-    const cut = computeRangeCut(8, 12, 1, null);
-    expect(cut.cutDuration).toBe(6);         // (12+1) - 7
-  });
-
-  test('handle = 0 = no handles', () => {
-    const cut = computeRangeCut(3, 7, 0);
-    expect(cut.sourceStart).toBe(3);
-    expect(cut.cutDuration).toBe(4);
-    expect(cut.localIn).toBe(0);
-    expect(cut.localOut).toBe(4);
-  });
-
-  test('very short segment at start', () => {
-    const cut = computeRangeCut(0, 1, 2);
-    expect(cut.sourceStart).toBe(0);         // clamped
-    expect(cut.localIn).toBe(0);
-    expect(cut.localOut).toBe(1);
-    expect(cut.cutDuration).toBe(3);         // (1+2) - 0
-  });
-
-  test('source duration shorter than segment out + handle', () => {
-    const cut = computeRangeCut(5, 9, 1, 9.5);  // source only 9.5s
-    expect(cut.sourceStart).toBe(4);
-    // end = min(9+1, 9.5) = 9.5; duration = 9.5-4 = 5.5
-    expect(cut.cutDuration).toBeCloseTo(5.5);
-    expect(cut.localOut).toBe(5);            // 9 - 4
-  });
-});

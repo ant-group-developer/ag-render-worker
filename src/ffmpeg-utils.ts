@@ -4,7 +4,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { childEnvWithoutSecrets } from '@ag-farm/worker-sdk';
 
@@ -110,35 +109,16 @@ export async function probeMedia(
   };
 }
 
-// ---- Cắt đoạn nguồn thành mezzanine cục bộ ----
+// ---- Tiện ích nội bộ ----
 
-export interface CutOptions {
-  /** Thời điểm bắt đầu cắt trong nguồn (giây). */
-  startSeconds: number;
-  /** Thời lượng cắt (giây). */
-  durationSeconds: number;
-  /** Chất lượng cao (final) hay nhanh (preview). */
-  quality: 'preview' | 'final';
-  /** Timeout (ms). Mặc định: 3600_000. */
-  timeoutMs?: number;
-  /** AbortSignal để huỷ. */
-  signal?: AbortSignal;
-  /** `nvenc` khi máy có NVENC (nhanh hơn nhiều ở 4K), mặc định `cpu`. */
-  encoder?: 'nvenc' | 'cpu';
-}
-
-/**
- * Cắt đoạn từ URL/path nguồn ra file mp4 cục bộ.
- * Preview: scale max 1280px cạnh dài, CRF 26, preset fast.
- * Final: giữ độ phân giải gốc, CRF 18, preset slow.
- */
 /**
  * Convert a file:// URL to a local file path.
- * ffmpeg does not support the file:// scheme on Windows.
+ * ffmpeg/ffprobe do not support the file:// scheme on Windows.
  */
 function normalizeSourcePath(sourceUrl: string): string {
   if (sourceUrl.startsWith('file://')) {
     try {
+      const { fileURLToPath } = require('node:url') as typeof import('node:url');
       return fileURLToPath(sourceUrl);
     } catch {
       // fallback: strip file:// prefix manually
@@ -150,51 +130,13 @@ function normalizeSourcePath(sourceUrl: string): string {
   return sourceUrl;
 }
 
-export async function cutSegmentToMezz(
-  sourceUrl: string,
-  outputPath: string,
-  opts: CutOptions,
-): Promise<void> {
-  const ffmpeg = resolveFfmpeg();
-  const { startSeconds, durationSeconds, quality, timeoutMs = 3_600_000, signal } = opts;
-  const sourcePath = normalizeSourcePath(sourceUrl);
-
-  const vfParts: string[] = [];
-  if (quality === 'preview') {
-    // Scale: giữ tỷ lệ, cạnh dài ≤ 1280, chia hết cho 2
-    vfParts.push("scale='if(gt(iw,ih),min(iw,1280),-2)':'if(gt(iw,ih),-2,min(ih,1280))'");
-  }
-
-  // Bản cắt chỉ là trung gian: renderComposition còn scale/encode lại nó thành mezzanine, nên không cần
-  // `-preset slow` (trước đây 40-60 s cho mỗi đoạn 4-5 s ở 4K trên CPU).
-  const quality18 = quality === 'preview' ? '26' : '18';
-  const videoCodec =
-    opts.encoder === 'nvenc'
-      ? ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', quality18, '-b:v', '0']
-      : ['-c:v', 'libx264', '-crf', quality18, '-preset', 'veryfast'];
-
-  const args: string[] = [
-    '-ss', String(startSeconds),
-    '-i', sourcePath,
-    '-t', String(durationSeconds),
-    ...videoCodec,
-    ...(vfParts.length > 0 ? ['-vf', vfParts.join(',')] : []),
-    '-c:a', 'aac',
-    '-ac', '2',
-    '-ar', '48000',
-    '-movflags', '+faststart',
-    '-y',
-    outputPath,
-  ];
-
-  await runFfmpeg(ffmpeg, args, { timeoutMs, signal });
-}
-
 // ---- Chạy ffmpeg ----
 
 interface RunFfmpegOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Working directory for the ffmpeg process (useful for relative filter paths). */
+  cwd?: string;
 }
 
 export async function runFfmpeg(
@@ -202,7 +144,7 @@ export async function runFfmpeg(
   args: string[],
   opts: RunFfmpegOptions = {},
 ): Promise<void> {
-  const { timeoutMs = 3_600_000, signal } = opts;
+  const { timeoutMs = 3_600_000, signal, cwd } = opts;
   const env = childEnvWithoutSecrets();
 
   return new Promise<void>((resolve, reject) => {
@@ -212,6 +154,7 @@ export async function runFfmpeg(
     const child = spawn(ffmpeg, args, {
       windowsHide: true,
       env,
+      cwd,
       stdio: ['ignore', 'ignore', 'pipe'],
     });
 

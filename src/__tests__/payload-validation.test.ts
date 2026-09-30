@@ -107,4 +107,46 @@ describe('StudioRenderPayloadSchema', () => {
       expect(result.data.handle_seconds).toBe(1);
     }
   });
+
+  test('thumbnails default to empty array', () => {
+    const result = StudioRenderPayloadSchema.safeParse(validRender);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.thumbnails).toEqual([]);
+    }
+  });
+
+  test('asset: composition input parses OK', () => {
+    const p = { ...validRender, composition: 'asset:some-id' };
+    const result = StudioRenderPayloadSchema.safeParse(p);
+    expect(result.success).toBe(true);
+  });
+
+  test('thumbnails with valid entries parse OK', () => {
+    const p = {
+      ...validRender,
+      thumbnails: [
+        { t_s: 3.5, text: 'Tiêu đề' },
+        { t_s: 10, text: 'Cảnh đẹp' },
+      ],
+    };
+    const result = StudioRenderPayloadSchema.safeParse(p);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.thumbnails).toHaveLength(2);
+    }
+  });
+
+  test('thumbnails with text too long fails', () => {
+    const p = { ...validRender, thumbnails: [{ t_s: 1, text: 'a'.repeat(41) }] };
+    expect(StudioRenderPayloadSchema.safeParse(p).success).toBe(false);
+  });
+
+  test('more than 3 thumbnails fails', () => {
+    const p = {
+      ...validRender,
+      thumbnails: [{ t_s: 1, text: 'A' }, { t_s: 2, text: 'B' }, { t_s: 3, text: 'C' }, { t_s: 4, text: 'D' }],
+    };
+    expect(StudioRenderPayloadSchema.safeParse(p).success).toBe(false);
+  });
 });
