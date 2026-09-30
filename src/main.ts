@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { getExtra } from './config.js';
 import { makeStudioTtsHandler } from './tts-handler.js';
 import { makeStudioRenderPreviewHandler, makeStudioRenderFinalHandler } from './render-handler.js';
+import { makeStudioExportPremiereHandler } from './premiere-handler.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -46,6 +47,7 @@ async function main(): Promise<void> {
   const ttHandler = makeStudioTtsHandler({ extra });
   const previewHandler = makeStudioRenderPreviewHandler(extra);
   const finalHandler = makeStudioRenderFinalHandler(extra);
+  const exportPremiereHandler = makeStudioExportPremiereHandler(extra);
 
   await runWorker({
     config,
@@ -54,6 +56,7 @@ async function main(): Promise<void> {
       'studio.tts': ttHandler,
       'studio.render_preview': previewHandler,
       'studio.render_final': finalHandler,
+      'studio.export_premiere': exportPremiereHandler,
     },
   });
 }
