@@ -4,6 +4,8 @@
  * ghi job JSON ra file tạm, spawn python tts.py, đọc result JSON.
  */
 import { spawn } from 'node:child_process';
+import { delimiter, dirname } from 'node:path';
+import { resolveFfmpeg } from './ffmpeg-utils.js';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -58,6 +60,18 @@ export type PythonRunner = (
 ) => Promise<PythonRunResult>;
 
 /**
+ * Env của tiến trình Python: thêm thư mục ffmpeg của worker (ffmpeg-static, cài qua npm) vào đầu PATH, vì
+ * các thư viện audio của engine gọi `ffmpeg` theo PATH và máy worker thường không cài ffmpeg riêng.
+ */
+function pythonEnv(): NodeJS.ProcessEnv {
+  const ffmpeg = resolveFfmpeg();
+  // a bare command name ("ffmpeg") is already found on PATH
+  if (!/[\\/]/.test(ffmpeg)) return process.env;
+  const key = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  return { ...process.env, [key]: `${dirname(ffmpeg)}${delimiter}${process.env[key] ?? ''}` };
+}
+
+/**
  * Tạo runner thật: spawn python tts.py với job/result JSON files.
  */
 export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
@@ -78,6 +92,7 @@ export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
         let settled = false;
         const child = spawn(opts.pythonBin, [scriptPath, ...args], {
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: pythonEnv(),
         });
         let timedOut = false;
         const timer = setTimeout(() => {

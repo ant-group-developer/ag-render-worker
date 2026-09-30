@@ -4,6 +4,7 @@
  */
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import {
   StudioTtsPayloadSchema,
   TtsManifestSchema,
@@ -31,6 +32,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 function defaultEnginesDir(): string {
   // src/ → ../ → engines/python
   return join(__dirname, '..', 'engines', 'python');
+}
+
+/**
+ * `cuda` when the machine has an NVIDIA GPU (nvidia-smi answers), else `cpu`; `extra.tts_device` overrides.
+ * Checked once per process.
+ */
+let detectedDevice: 'cuda' | 'cpu' | null = null;
+export function resolveTtsDevice(configured: string | undefined): string {
+  if (configured && configured !== 'auto') return configured;
+  if (detectedDevice === null) {
+    const r = spawnSync('nvidia-smi', ['-L'], { timeout: 5_000, windowsHide: true });
+    detectedDevice = r.status === 0 && String(r.stdout).includes('GPU') ? 'cuda' : 'cpu';
+  }
+  return detectedDevice;
 }
 
 // ---- Handler ----
@@ -103,10 +118,12 @@ export function makeStudioTtsHandler(
       pause_seconds: line.pause_seconds,
     }));
 
+    const device = resolveTtsDevice(extra.tts_device);
     const engineJob = {
-      device: 'cpu',  // no GPU: máy này không có NVIDIA GPU
+      device,
       model: 'k2-fsa/OmniVoice',
-      dtype: 'float32',
+      // half precision on the GPU (less VRAM, faster); the CPU runs float32
+      dtype: device === 'cpu' ? 'float32' : 'float16',
       num_step: 10,
       speed: payload.voice.speed,
       language: payload.language,

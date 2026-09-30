@@ -15,6 +15,8 @@ export interface RenderWorkerExtra {
   ffmpeg_timeout_s?: number;
   /** Thư mục chứa arial.ttf. Mặc định: thư mục font của hệ điều hành (xem fonts.ts). */
   fonts_dir?: string;
+  /** Thiết bị cho TTS: 'auto' (cuda nếu máy có GPU NVIDIA, không thì cpu), 'cuda', 'cpu'. Mặc định: 'auto'. */
+  tts_device?: string;
   /** Encoder cho render: 'auto' (NVENC nếu có, không thì CPU), 'nvenc' hoặc 'cpu'. Mặc định: 'auto'. */
   encoder?: 'auto' | 'nvenc' | 'cpu';
 }
@@ -33,6 +35,7 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
     ffmpeg_timeout_s:
       typeof extra['ffmpeg_timeout_s'] === 'number' ? extra['ffmpeg_timeout_s'] : undefined,
     fonts_dir: typeof extra['fonts_dir'] === 'string' ? extra['fonts_dir'] : undefined,
+    tts_device: typeof extra['tts_device'] === 'string' ? extra['tts_device'] : undefined,
     encoder:
       extra['encoder'] === 'auto' || extra['encoder'] === 'nvenc' || extra['encoder'] === 'cpu'
         ? extra['encoder']
