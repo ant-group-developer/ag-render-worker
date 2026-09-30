@@ -55,8 +55,11 @@ function makeMezzCache(cacheDir: string): RenderDeps['cache'] {
  * Text dài sẽ được ASS tự ngắt dòng (WrapStyle: 1 = smart wrap).
  */
 export function buildThumbnailAss(text: string, width: number, height: number): string {
-  const fontSize = Math.round(Math.min(width, height) * 0.072);
-  const outline = Math.max(3, Math.round(fontSize * 0.12));
+  // Thumbnail text is read at phone size in a feed: big, bold, thick outline and a shadow (texts are at most
+  // 40 characters; WrapStyle 1 breaks a long one over two lines).
+  const fontSize = Math.round(Math.min(width, height) * 0.12);
+  const outline = Math.max(4, Math.round(fontSize * 0.1));
+  const shadow = Math.max(2, Math.round(fontSize * 0.04));
   const marginV = Math.round(height * 0.06);
   const marginH = Math.round(width * 0.05);
   return (
@@ -69,7 +72,7 @@ export function buildThumbnailAss(text: string, width: number, height: number): 
     '\n' +
     '[V4+ Styles]\n' +
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n' +
-    `Style: Thumb,Arial,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${outline},0,2,${marginH},${marginH},${marginV},1\n` +
+    `Style: Thumb,Arial,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${outline},${shadow},2,${marginH},${marginH},${marginV},1\n` +
     '\n' +
     '[Events]\n' +
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n' +
