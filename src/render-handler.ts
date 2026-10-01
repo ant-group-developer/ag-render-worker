@@ -5,7 +5,7 @@
  *
  * GĐ2: footage clips dùng `asset:<id>` (toàn bộ file gốc, không cắt). `segment:` không còn hỗ trợ.
  */
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname, basename, relative } from 'node:path';
 import {
@@ -42,10 +42,26 @@ export function clipSourceId(sourceId: string, index: number): string {
   return `src_${id}`;
 }
 
-// ---- Cache mezzanine đơn giản (dựa trên file system) ----
+// ---- Cache mezzanine (dựa trên file system) ----
 
-function makeMezzCache(cacheDir: string): RenderDeps['cache'] {
-  return { dir: cacheDir, maxBytes: 20 * 1024 * 1024 * 1024 };
+const GB = 1024 * 1024 * 1024;
+const DEFAULT_MEZZ_CACHE_GB = 20;
+
+/**
+ * Thư mục cache mezzanine dùng chung giữa các job khi config có `mezz_cache_dir` (main.ts đặt mặc định
+ * cạnh thư mục cache của SDK), nên "Render lại" một tập không phải chuẩn hoá lại các video đã chuẩn hoá.
+ * Không có thì cache nằm trong thư mục job như trước (test).
+ */
+function makeMezzCache(extra: RenderWorkerExtra, workDir: string): RenderDeps['cache'] {
+  const dir = extra.mezz_cache_dir ?? join(workDir, 'mezz_cache');
+  mkdirSync(dir, { recursive: true });
+  return { dir, maxBytes: (extra.mezz_cache_gb ?? DEFAULT_MEZZ_CACHE_GB) * GB };
+}
+
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest('hex');
 }
 
 // ---- Tạo ASS subtitle đơn giản cho thumbnail ----
@@ -182,6 +198,11 @@ async function handleStudioRender(
   }
 
   const inputToLocal = new Map<string, string>();
+  /**
+   * Nội dung của từng input, gộp vào khoá cache mezzanine: `cache_key` ag-go cấp (original:/proxy:/variant:
+   * theo id, đổi khi file đổi) hoặc sha256 của file. Không dùng đường dẫn cục bộ: nó khác nhau ở mỗi job.
+   */
+  const inputIdentity = new Map<string, string>();
   const sourceMetas = new Map<string, {
     source_kind: 'original' | 'proxy' | 'preview';
     watermarked: boolean;
@@ -229,6 +250,7 @@ async function handleStudioRender(
 
       downloadedByInput.set(inputName, localPath);
       inputToLocal.set(inputName, localPath);
+      if (cacheKey) inputIdentity.set(inputName, `cache_key:${cacheKey}`);
 
       ctx.progress(
         8 + Math.round(37 * ((i + 1) / assetInputs.length)),
@@ -296,12 +318,15 @@ async function handleStudioRender(
   const outDir = join(workDir, 'render_out');
   mkdirSync(outDir, { recursive: true });
 
-  const mezzCacheDir = join(workDir, 'mezz_cache');
-  mkdirSync(mezzCacheDir, { recursive: true });
-
   const sourceChecksums = new Map<string, string>();
-  for (const seg of localComposition.segments) {
-    sourceChecksums.set(seg.source_id, seg.source_path);
+  for (const seg of composition.segments) {
+    if (sourceChecksums.has(seg.source_id)) continue;
+    const known = inputIdentity.get(seg.source_path);
+    const local = inputToLocal.get(seg.source_path);
+    sourceChecksums.set(
+      seg.source_id,
+      known ?? (local ? `sha256:${await sha256File(local)}` : `input:${seg.source_path}`),
+    );
   }
 
   const clock = { now: () => new Date().toISOString() };
@@ -329,7 +354,7 @@ async function handleStudioRender(
         }
       },
     },
-    cache: makeMezzCache(mezzCacheDir),
+    cache: makeMezzCache(extra, workDir),
     nvencAvailable: async () => {
       try {
         return await probeNvenc(ffmpeg);

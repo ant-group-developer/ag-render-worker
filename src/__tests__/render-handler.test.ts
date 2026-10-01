@@ -439,6 +439,50 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
     },
     120_000,
   );
+
+  test(
+    'a second job reuses the mezzanines of the first from the shared mezz cache',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      const { readdirSync } = await import('node:fs');
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      const mezzDir = join(testDir, `mezz-${randomUUID()}`);
+      const logs: string[] = [];
+
+      const runOnce = async (n: number) => {
+        sign.register('asset:asset-001', sourceVideoPath);
+        sign.register('stage:tts/L001.wav', narrationWavPath);
+        const workDir = join(testDir, `run-cache-${n}-${randomUUID()}`);
+        mkdirSync(workDir, { recursive: true });
+        const compositionPath = join(workDir, 'composition.json');
+        writeFileSync(compositionPath, JSON.stringify(buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS)), 'utf8');
+        sign.register('stage:renders/1/composition.json', compositionPath);
+        const payload = {
+          production_id: 'prod-test', revision: n, composition: 'stage:renders/1/composition.json',
+          canvas: CANVAS, output: `renders/${n}/preview.mp4`,
+        };
+        const ctx = {
+          job: { id: `job-cache-${n}`, type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+          payload, workDir, sign, cache: null,
+          log: { info: (msg: string) => { logs.push(msg); }, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+          signal: new AbortController().signal,
+          progress: () => {},
+          download: store.makeDownload(sign),
+          upload: store.makeUpload(),
+          uploadJson: store.makeUploadJson(),
+        };
+        await makeStudioRenderPreviewHandler({ mezz_cache_dir: mezzDir })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+        return readdirSync(mezzDir).filter((f) => f.endsWith('.mp4')).sort();
+      };
+
+      const first = await runOnce(1);
+      expect(first.length).toBeGreaterThan(0);
+      // Another job dir, same source file: same keys, nothing new encoded into the cache.
+      const second = await runOnce(2);
+      expect(second).toEqual(first);
+    },
+    180_000,
+  );
 });
 
 // ---- Integration: 2-clip composition + 1 thumbnail ----

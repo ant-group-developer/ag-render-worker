@@ -19,6 +19,10 @@ export interface RenderWorkerExtra {
   tts_device?: string;
   /** Encoder cho render: 'auto' (NVENC nếu có, không thì CPU), 'nvenc' hoặc 'cpu'. Mặc định: 'auto'. */
   encoder?: 'auto' | 'nvenc' | 'cpu';
+  /** Thư mục cache mezzanine dùng chung giữa các job. Mặc định (main.ts): `<cache.dir>-mezz`. */
+  mezz_cache_dir?: string;
+  /** Trần dung lượng cache mezzanine (GB). Mặc định: 20. */
+  mezz_cache_gb?: number;
 }
 
 export function getExtra(extra: Record<string, unknown> | undefined): RenderWorkerExtra {
@@ -39,6 +43,11 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
     encoder:
       extra['encoder'] === 'auto' || extra['encoder'] === 'nvenc' || extra['encoder'] === 'cpu'
         ? extra['encoder']
+        : undefined,
+    mezz_cache_dir: typeof extra['mezz_cache_dir'] === 'string' ? extra['mezz_cache_dir'] : undefined,
+    mezz_cache_gb:
+      typeof extra['mezz_cache_gb'] === 'number' && extra['mezz_cache_gb'] > 0
+        ? extra['mezz_cache_gb']
         : undefined,
   };
 }

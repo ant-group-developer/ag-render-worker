@@ -31,6 +31,8 @@ async function main(): Promise<void> {
   const configPath = getConfigPath();
   const config = loadConfig(configPath);
   const extra = getExtra(config.extra);
+  // Mezzanine dùng chung giữa các job, cạnh cache tải về của SDK (SDK tự dọn thư mục của nó theo max_gb).
+  extra.mezz_cache_dir ??= `${config.cache.dir.replace(/[\\/]+$/, '')}-mezz`;
 
   let version = '0.0.0';
   try {
