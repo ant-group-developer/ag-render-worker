@@ -19,7 +19,7 @@ function getConfigPath(): string {
   const args = process.argv.slice(2);
   const idx = args.indexOf('--config');
   if (idx === -1 || idx + 1 >= args.length) {
-    console.error('Dùng: ag-render-worker --config <đường dẫn file YAML>');
+    console.error('Dung: ag-render-worker --config <duong dan file YAML>');
     process.exit(1);
   }
   return args[idx + 1]!;
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
     // ignore
   }
 
-  console.log(`ag-render-worker v${version} khởi động với config: ${configPath}`);
+  console.log(`ag-render-worker v${version} khoi dong voi config: ${configPath}`);
 
   // Tạo handlers với extra config
   const ttHandler = makeStudioTtsHandler({ extra });
