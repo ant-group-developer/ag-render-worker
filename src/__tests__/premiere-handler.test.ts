@@ -290,6 +290,7 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
       media: 'proxy',
       name: 'Test Episode',
       markers: [{ t_s: 0, title: 'Intro' }, { t_s: 1.5, title: 'Main' }],
+      media_names: { 'asset:clip-001': 'Chợ nổi Cái Răng – Đà Lạt' },
       output: 'episodes/ep-001/premiere/job-001.zip',
     };
 
@@ -327,8 +328,17 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
       expect(parsed.data.media).toBe('proxy');
       expect(parsed.data.files.length).toBeGreaterThan(0);
       expect(parsed.data.output).toBe('episodes/ep-001/premiere/job-001.zip');
+      // The media file is named after the video, not its id
+      expect(parsed.data.files.map((f) => f.path)).toContain('media/01-Cho_noi_Cai_Rang_Da_Lat.mp4');
     }
   }, 120_000);
+
+  test('slugify drops Vietnamese marks and falls back to the id', async () => {
+    const { slugify } = await import('../premiere-handler.js');
+    expect(slugify('Chợ nổi Cái Răng – Đà Lạt')).toBe('Cho_noi_Cai_Rang_Da_Lat');
+    expect(slugify('asset:0194f7c2-7a11')).toBe('0194f7c2-7a11');
+    expect(slugify('???')).toBe('clip');
+  });
 
   // ---- Real ffmpeg overlay PNG test ----
 

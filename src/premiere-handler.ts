@@ -46,10 +46,17 @@ function writeZipToFile(zipFile: yazl.ZipFile, destPath: string): Promise<void> 
 
 // ---- Slug helpers ----
 
-/** Turn a source id or name into a filesystem-safe slug (max 40 chars). */
-function slugify(s: string): string {
+/**
+ * Turn a source id or a video name into a filesystem-safe ASCII slug (max 40 chars): Vietnamese marks are
+ * dropped (`Chợ nổi Cái Răng` → `Cho_noi_Cai_Rang`) so Premiere on any OS finds the file the XML names.
+ */
+export function slugify(s: string): string {
   return s
     .replace(/^[a-z]+:/, '')       // strip input-kind prefix
+    .normalize('NFD')
+    .replace(/\p{Mn}/gu, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
     .replace(/[^a-zA-Z0-9.-]/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '')
@@ -128,6 +135,13 @@ async function handleExportPremiere(
     }
   }
 
+  // `media/NN-<tên video>.mp4`: the name Studio sent for the video, its id when there is none.
+  const mediaFileNames = new Map<string, string>();
+  assetInputs.forEach((inputName, i) => {
+    const slug = slugify(payload.media_names[inputName] ?? inputName.replace(/^asset:/, ''));
+    mediaFileNames.set(inputName, `${String(i + 1).padStart(2, '0')}-${slug}.mp4`);
+  });
+
   // Sign all asset inputs to get metadata (source_kind, watermarked, cache_key)
   const totalAssets = assetInputs.length + (composition.music ? 1 : 0);
   let downloadedCount = 0;
@@ -136,12 +150,7 @@ async function handleExportPremiere(
     const inputName = assetInputs[i]!;
     if (ctx.signal.aborted) throw new Error('Job aborted');
 
-    // Derive a slug for the local filename
-    const slug = slugify(inputName.replace(/^asset:/, ''));
-    const ext = inputName.includes('.') ? '.' + inputName.split('.').pop()! : '.mp4';
-    const nn = String(i + 1).padStart(2, '0');
-    const localFileName = `${nn}-${slug}${ext}`;
-    const localPath = join(mediaDir, localFileName);
+    const localPath = join(mediaDir, mediaFileNames.get(inputName)!);
 
     await ctx.download(inputName, localPath);
 
@@ -233,10 +242,7 @@ async function handleExportPremiere(
     const info = probed.get(inputName) ?? { durationFrames: fps * 5, width: canvasW, height: canvasH, hasAudio: false };
     // Clip duration is the used portion (seg.out - seg.in)
     const clipDurationFrames = Math.max(1, Math.round((seg.out - seg.in) * fps));
-    const nn = String(assetInputs.indexOf(inputName) + 1).padStart(2, '0');
-    const slug = slugify(inputName.replace(/^asset:/, ''));
-    const ext = extname(localPath) || '.mp4';
-    const relPath = `media/${nn}-${slug}${ext}`;
+    const relPath = `media/${basename(localPath)}`;
 
     const premiereFile: PremiereFile = {
       key: seg.source_id ?? inputName,
@@ -391,10 +397,7 @@ async function handleExportPremiere(
   const manifestFiles: Array<{ path: string; size_bytes: number; source_kind: 'original' | 'proxy' | 'preview'; watermarked: boolean }> = [];
 
   for (const [inputName, localPath] of downloadedMedia) {
-    const nn = String(assetInputs.indexOf(inputName) + 1).padStart(2, '0');
-    const slug = slugify(inputName.replace(/^asset:/, ''));
-    const ext = extname(localPath) || '.mp4';
-    const zipEntryName = `media/${nn}-${slug}${ext}`;
+    const zipEntryName = `media/${basename(localPath)}`;
     const stat = statSync(localPath);
     zipFile.addFile(localPath, zipEntryName, { compress: false });
     const meta = sourceMetas.get(inputName) ?? { source_kind: 'proxy', watermarked: false };
