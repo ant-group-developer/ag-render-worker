@@ -367,6 +367,11 @@ async function handleExportPremiere(
     name: mk.title,
   }));
 
+  // Studio writes the timeline's `source_audio.muted` as `has_audio: false` on every segment
+  // (`timelineToComposition`), and the render then drops their sound: A1 follows.
+  const assetSegments = segments.filter((s) => s.source_path.startsWith('asset:'));
+  const sourceAudioMuted = assetSegments.length > 0 && assetSegments.every((s) => !s.has_audio);
+
   const seq: PremiereSequence = {
     name: payload.name,
     fps,
@@ -375,7 +380,7 @@ async function handleExportPremiere(
     clips,
     overlays,
     music: musicEntry,
-    sourceAudioMuted: false,
+    sourceAudioMuted,
     markers,
   };
 

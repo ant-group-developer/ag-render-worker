@@ -333,6 +333,44 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
     }
   }, 120_000);
 
+  /** Runs the handler on `comp` (one 3 s clip with sound, `asset:clip-001`) and returns the project.xml it built. */
+  async function exportXml(comp: ReturnType<typeof buildExportComposition>, extraInputs: Record<string, string> = {}): Promise<string> {
+    const sign = new FakeSignClient();
+    const store = new FakeUploadStore();
+    const workDir = join(testDir, `run-xml-${randomUUID()}`);
+    mkdirSync(workDir, { recursive: true });
+    sign.register('asset:clip-001', assetVideoPath);
+    for (const [name, path] of Object.entries(extraInputs)) sign.register(name, path);
+    const compPath = join(workDir, 'composition.json');
+    writeFileSync(compPath, JSON.stringify(comp), 'utf8');
+    sign.register('stage:comp.json', compPath);
+    const payload = {
+      production_id: 'prod-xml', episode_id: 'ep-xml', composition: 'stage:comp.json', media: 'proxy',
+      name: 'XML Test', markers: [], output: 'episodes/ep-xml/premiere/job.zip',
+    };
+    const ctx = buildFakeCtx(workDir, payload, sign, store);
+    const { makeStudioExportPremiereHandler } = await import('../premiere-handler.js');
+    await makeStudioExportPremiereHandler({})(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+    return readFileSync(join(workDir, 'project.xml'), 'utf8');
+  }
+
+  test('A1 carries the videos\' sound when the composition keeps it', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const xml = await exportXml(buildExportComposition('asset:clip-001', 3, CANVAS));
+    expect(xml).toContain('id="clipitem-a1"');
+  }, 120_000);
+
+  test('A1 is empty when the composition mutes the source audio (segments[].has_audio=false)', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const comp = buildExportComposition('asset:clip-001', 3, CANVAS);
+    comp.segments = comp.segments.map((s) => ({ ...s, has_audio: false }));
+    const xml = await exportXml(comp);
+    expect(xml).not.toContain('clipitem-a');
+    // The video stays on V1 and is no longer linked to a sound clip.
+    expect(xml).toContain('id="clipitem-v1"');
+    expect(xml).not.toContain('<linkclipref>');
+  }, 120_000);
+
   test('slugify drops Vietnamese marks and falls back to the id', async () => {
     const { slugify } = await import('../premiere-handler.js');
     expect(slugify('Chợ nổi Cái Răng – Đà Lạt')).toBe('Cho_noi_Cai_Rang_Da_Lat');
