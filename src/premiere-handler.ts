@@ -357,7 +357,10 @@ async function handleExportPremiere(
         height: 0,
         hasAudio: true,
       },
-      gainDb: 0, // gain applied separately by Premiere user; default brand gain is -18dB
+      // Same level and fades as the render's music chain (`audioGraph` in @harness/core).
+      gainDb: composition.music.cues[0]?.gain_db ?? -18,
+      fadeInFrames: secondsToFrames(composition.music.fade_in, fps),
+      fadeOutFrames: secondsToFrames(composition.music.fade_out, fps),
     };
   }
 

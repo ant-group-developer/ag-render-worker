@@ -240,6 +240,7 @@ describe('PremiereManifestSchema', () => {
 describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
   let testDir: string;
   let assetVideoPath: string;
+  let musicPath: string;
   let ffmpegOk = false;
 
   const CANVAS = { width: 320, height: 180 };
@@ -263,6 +264,10 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
         '-f', 'lavfi', '-i', 'aevalsrc=0:c=mono:s=48000:d=3',
         '-c:v', 'libx264', '-crf', '40', '-preset', 'ultrafast',
         '-c:a', 'aac', '-t', '3', '-y', assetVideoPath,
+      ], { timeout: 30_000 });
+      musicPath = join(testDir, 'music.wav');
+      await execFileAsync(FFMPEG, [
+        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2', '-y', musicPath,
       ], { timeout: 30_000 });
     }
   }, 60_000);
@@ -369,6 +374,27 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
     // The video stays on V1 and is no longer linked to a sound clip.
     expect(xml).toContain('id="clipitem-v1"');
     expect(xml).not.toContain('<linkclipref>');
+  }, 120_000);
+
+  test('A2 takes the music level and fades from the composition', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    // What `timelineToComposition` sends: 3 s episode, 2 s track looped, -18 dB, fade in 1 s, fade out 2 s.
+    const comp = {
+      ...buildExportComposition('asset:clip-001', 3, CANVAS),
+      music: {
+        track_id: '01MUSIC', path: 'stage:music.wav', loop: true, fade_in: 1, fade_out: 2,
+        cues: [{ start: 0, end: 3, gain_db: -18 }],
+        duck: { windows: [], gain_db: -8, attack_ms: 200, release_ms: 500 },
+      },
+    };
+    const xml = await exportXml(comp as unknown as ReturnType<typeof buildExportComposition>, { 'stage:music.wav': musicPath });
+    const clip = (id: string) => xml.match(new RegExp(`<clipitem id="${id}">([\\s\\S]*?)</clipitem>`))?.[1] ?? '';
+    const kf = (id: string) => [...clip(id).matchAll(/<when>(\d+)<\/when>\s*<value>([\d.]+)<\/value>/g)]
+      .map((m) => [Number(m[1]), Number(m[2])]);
+    // 75 frames at 25 fps: m1 [0,50), m2 [50,75). -18 dB = 0.12589; fade-in to frame 25, fade-out from frame 25.
+    expect(clip('clipitem-m1')).toContain('<value>0.12589</value>');
+    expect(kf('clipitem-m1')).toEqual([[0, 0], [25, 0.12589], [50, 0.06295]]);
+    expect(kf('clipitem-m2')).toEqual([[0, 0.06295], [25, 0]]);
   }, 120_000);
 
   test('slugify drops Vietnamese marks and falls back to the id', async () => {

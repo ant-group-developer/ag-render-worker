@@ -4,7 +4,8 @@
  * transparent PNGs on V2; chapters become sequence markers.
  *
  * Tracks: V1 the videos back to back, V2 the text overlays, A1 the videos' own sound (linked to V1, absent when
- * the episode mutes it), A2 the music (repeated to cover the sequence, as the render loops it).
+ * the episode mutes it), A2 the music (repeated to cover the sequence, as the render loops it; its gain is the
+ * Audio Levels value and its fades are level keyframes).
  *
  * Media paths are RELATIVE to the XML (`media/…`, `overlays/…`): Premiere asks to locate the first missing file and
  * then finds the others in the same folders ("Relink others automatically"). The README in the zip says so.
@@ -30,7 +31,8 @@ export interface PremiereSequence {
   /** V1 clips in play order; each plays its whole file. */
   clips: { file: PremiereFile; startFrame: number }[];
   overlays: { name: string; path: string; startFrame: number; endFrame: number }[];
-  music: { file: PremiereFile; gainDb: number } | null;
+  /** A2. `fadeInFrames`/`fadeOutFrames` ramp the level from/to silence at the start/end of the sequence. */
+  music: { file: PremiereFile; gainDb: number; fadeInFrames?: number; fadeOutFrames?: number } | null;
   sourceAudioMuted: boolean;
   markers: { frame: number; name: string }[];
 }
@@ -146,18 +148,35 @@ export function premiereXml(seq: PremiereSequence): string {
   x.close("track");
   if (seq.music && seq.music.file.durationFrames > 0 && total > 0) {
     const m = seq.music;
+    const gain = 10 ** (m.gainDb / 20);
+    const fadeIn = m.fadeInFrames ?? 0;
+    const fadeOut = m.fadeOutFrames ?? 0;
+    // Linear level at sequence frame f, as the render's afade in/out around `volume`.
+    const level = (f: number) => {
+      let k = 1;
+      if (fadeIn > 0) k = Math.min(k, f / fadeIn);
+      if (fadeOut > 0) k = Math.min(k, (total - f) / fadeOut);
+      return round5(gain * Math.max(0, k));
+    };
     x.open("track");
     let at = 0;
     let n = 0;
     while (at < total) {
       const len = Math.min(m.file.durationFrames, total - at);
       n++;
+      const clipStart = at;
+      // Keyframes at the clip's edges and where a fade starts/ends inside it; `when` counts from the clip start (in=0).
+      const points = fadeIn > 0 || fadeOut > 0
+        ? [...new Set([clipStart, clipStart + len, fadeIn, total - fadeOut])].filter((f) => f >= clipStart && f <= clipStart + len).sort((a, b) => a - b)
+        : [];
       clipitem(`clipitem-m${n}`, m.file.name, at, at + len, 0, len, m.file.durationFrames, () => {
         file(m.file);
         x.open("sourcetrack").leaf("mediatype", "audio").leaf("trackindex", 1).close("sourcetrack");
-        if (m.gainDb !== 0) {
+        if (m.gainDb !== 0 || points.length) {
           x.open("filter").open("effect").leaf("name", "Audio Levels").leaf("effectid", "audiolevels").leaf("effectcategory", "audiolevels").leaf("effecttype", "audiolevels").leaf("mediatype", "audio");
-          x.open("parameter").leaf("parameterid", "level").leaf("name", "Level").leaf("valuemin", 0).leaf("valuemax", 3.98109).leaf("value", round5(10 ** (m.gainDb / 20))).close("parameter");
+          x.open("parameter").leaf("parameterid", "level").leaf("name", "Level").leaf("valuemin", 0).leaf("valuemax", 3.98109).leaf("value", round5(gain));
+          for (const f of points) x.open("keyframe").leaf("when", f - clipStart).leaf("value", level(f)).close("keyframe");
+          x.close("parameter");
           x.close("effect").close("filter");
         }
       });

@@ -7,7 +7,8 @@
  *   - Files declared once then referenced by id
  *   - URL-encoded relative paths
  *   - A1 omits clips without audio; A1 track absent when sourceAudioMuted=true
- *   - Music repeats to cover the sequence; Audio Levels filter only when gain ≠ 0
+ *   - Music repeats to cover the sequence; Audio Levels filter only when gain ≠ 0 or the music fades;
+ *     fades as level keyframes
  *   - Markers present in output
  *   - escapeXml and pathUrl helpers
  */
@@ -277,7 +278,41 @@ describe('premiereXml: music track', () => {
     // -6 dB → linear = 10^(-6/20) = 0.50119..., rounded to 5dp = 0.50119
     expect(xml).toContain('<value>0.50119</value>');
   });
+
+  test('no level keyframes when the music has no fades', () => {
+    const xml = premiereXml(makeSeq({ music: { file: musicFile, gainDb: -6 } }));
+    expect(xml).not.toContain('<keyframe>');
+  });
+
+  test('fades become Audio Levels keyframes across the repeated music clips', () => {
+    // Sequence 125 frames, music 50 frames → m1 [0,50), m2 [50,100), m3 [100,125).
+    // -18 dB = 0.12589; fade-in 25 frames from 0, fade-out 50 frames ending at 125 (starts at 75, inside m2).
+    const f1 = makeFile({ key: 'c1', durationFrames: 75, hasAudio: false });
+    const f2 = makeFile({ key: 'c2', name: 'b.mp4', path: 'media/b.mp4', durationFrames: 50, hasAudio: false });
+    const xml = premiereXml(makeSeq({
+      clips: [{ file: f1, startFrame: 0 }, { file: f2, startFrame: 75 }],
+      music: { file: musicFile, gainDb: -18, fadeInFrames: 25, fadeOutFrames: 50 },
+    }));
+    expect(() => parse(xml)).not.toThrow();
+    // `when` counts from the clip's start (every music clip has in=0).
+    expect(keyframes(xml, 'clipitem-m1')).toEqual([[0, 0], [25, 0.12589], [50, 0.12589]]);
+    expect(keyframes(xml, 'clipitem-m2')).toEqual([[0, 0.12589], [25, 0.12589], [50, 0.06295]]);
+    expect(keyframes(xml, 'clipitem-m3')).toEqual([[0, 0.06295], [25, 0]]);
+  });
+
+  test('a fade at 0 dB still writes the Audio Levels filter', () => {
+    const xml = premiereXml(makeSeq({ music: { file: musicFile, gainDb: 0, fadeInFrames: 10, fadeOutFrames: 0 } }));
+    expect(xml).toContain('<name>Audio Levels</name>');
+    expect(keyframes(xml, 'clipitem-m1')).toEqual([[0, 0], [10, 1], [50, 1]]);
+  });
 });
+
+/** [when, value] of the level keyframes inside one clipitem. */
+function keyframes(xml: string, clipId: string): [number, number][] {
+  const body = xml.match(new RegExp(`<clipitem id="${clipId}">([\\s\\S]*?)</clipitem>`))?.[1] ?? '';
+  return [...body.matchAll(/<keyframe>\s*<when>(\d+)<\/when>\s*<value>([\d.]+)<\/value>\s*<\/keyframe>/g)]
+    .map((m) => [Number(m[1]), Number(m[2])]);
+}
 
 // ---- Markers ----
 
