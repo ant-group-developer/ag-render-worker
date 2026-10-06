@@ -9,8 +9,10 @@ token: 'DAN_TOKEN_NODE_VAO_DAY'
 name: gpu-01-render
 kinds:
   - studio.tts
+  - studio.transcribe
   - studio.render_preview
   - studio.render_final
+  - studio.export_premiere
 work_dir: 'D:\ag-farm\render\work'
 cache:
   dir: 'D:\ag-farm\render\cache'
@@ -23,8 +25,13 @@ cache:
 #   - { days: [1, 2, 3, 4, 5], from: '19:00', to: '07:00' }
 
 extra:
-  # Python trong venv đã cài torch + OmniVoice (deploy/setup-python.ps1)
+  # Python trong venv có torch + OmniVoice + WhisperX (deploy/setup-python.ps1). Máy chỉ nhận studio.tts và
+  # studio.transcribe khi chính file này import được torch.
   python_bin: 'D:\ag-farm\venv\Scripts\python.exe'
+  # Nhận dạng lời nói (studio.transcribe): thiết bị, compute_type, batch_size. GPU 4 GB thì int8_float16 + 4.
+  # transcribe_device: auto
+  # transcribe_compute_type: float16
+  # transcribe_batch_size: 8
   # Máy chạy cả ag-scan-worker: nhả model Ollama khỏi VRAM trước khi TTS
   unload_ollama_before_tts: true
   ollama_url: http://localhost:11434
