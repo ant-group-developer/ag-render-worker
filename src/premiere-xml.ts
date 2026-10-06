@@ -3,8 +3,8 @@
  * (File > Import). Premiere cannot read titles/generators from this format, so on-screen texts come as
  * transparent PNGs on V2; chapters become sequence markers.
  *
- * Tracks: V1 the videos back to back, V2 the text overlays, A1 the videos' own sound (linked to V1, absent when
- * the episode mutes it), A2 the music (repeated to cover the sequence, as the render loops it; its gain is the
+ * Tracks: V1 the videos back to back, V2 the text overlays, A1 the videos' own sound (linked to V1, at
+ * `sourceAudioGainDb`, absent when the episode mutes it), A2 the music (repeated to cover the sequence, as the render loops it; its gain is the
  * Audio Levels value and its fades are level keyframes).
  *
  * Media paths are RELATIVE to the XML (`media/…`, `overlays/…`): Premiere asks to locate the first missing file and
@@ -34,6 +34,8 @@ export interface PremiereSequence {
   /** A2. `fadeInFrames`/`fadeOutFrames` ramp the level from/to silence at the start/end of the sequence. */
   music: { file: PremiereFile; gainDb: number; fadeInFrames?: number; fadeOutFrames?: number } | null;
   sourceAudioMuted: boolean;
+  /** Level of the A1 clips (0 when absent). */
+  sourceAudioGainDb?: number;
   markers: { frame: number; name: string }[];
 }
 
@@ -101,6 +103,15 @@ export function premiereXml(seq: PremiereSequence): string {
     }
   };
 
+  // Premiere's "Audio Levels": a linear gain (1 = 0 dB, 3.98109 = +12 dB), optionally keyframed (`when` from the clip start).
+  const audioLevels = (gain: number, keyframes: [number, number][] = []) => {
+    x.open("filter").open("effect").leaf("name", "Audio Levels").leaf("effectid", "audiolevels").leaf("effectcategory", "audiolevels").leaf("effecttype", "audiolevels").leaf("mediatype", "audio");
+    x.open("parameter").leaf("parameterid", "level").leaf("name", "Level").leaf("valuemin", 0).leaf("valuemax", 3.98109).leaf("value", round5(gain));
+    for (const [when, value] of keyframes) x.open("keyframe").leaf("when", when).leaf("value", value).close("keyframe");
+    x.close("parameter");
+    x.close("effect").close("filter");
+  };
+
   // ---- video
   x.open("video");
   x.open("format").open("samplecharacteristics").raw(rate(seq.fps)).leaf("width", seq.width).leaf("height", seq.height)
@@ -138,6 +149,7 @@ export function premiereXml(seq: PremiereSequence): string {
       clipitem(`clipitem-a${i + 1}`, c.file.name, c.startFrame, c.startFrame + c.file.durationFrames, 0, c.file.durationFrames, c.file.durationFrames, () => {
         file(c.file);
         x.open("sourcetrack").leaf("mediatype", "audio").leaf("trackindex", 1).close("sourcetrack");
+        if (seq.sourceAudioGainDb) audioLevels(10 ** (seq.sourceAudioGainDb / 20));
         link([
           { id: `clipitem-v${i + 1}`, mediatype: "video", trackindex: 1, clipindex: i + 1 },
           { id: `clipitem-a${i + 1}`, mediatype: "audio", trackindex: 1, clipindex: audioIndex(seq, i) },
@@ -172,13 +184,7 @@ export function premiereXml(seq: PremiereSequence): string {
       clipitem(`clipitem-m${n}`, m.file.name, at, at + len, 0, len, m.file.durationFrames, () => {
         file(m.file);
         x.open("sourcetrack").leaf("mediatype", "audio").leaf("trackindex", 1).close("sourcetrack");
-        if (m.gainDb !== 0 || points.length) {
-          x.open("filter").open("effect").leaf("name", "Audio Levels").leaf("effectid", "audiolevels").leaf("effectcategory", "audiolevels").leaf("effecttype", "audiolevels").leaf("mediatype", "audio");
-          x.open("parameter").leaf("parameterid", "level").leaf("name", "Level").leaf("valuemin", 0).leaf("valuemax", 3.98109).leaf("value", round5(gain));
-          for (const f of points) x.open("keyframe").leaf("when", f - clipStart).leaf("value", level(f)).close("keyframe");
-          x.close("parameter");
-          x.close("effect").close("filter");
-        }
+        if (m.gainDb !== 0 || points.length) audioLevels(gain, points.map((f) => [f - clipStart, level(f)]));
       });
       at += len;
     }

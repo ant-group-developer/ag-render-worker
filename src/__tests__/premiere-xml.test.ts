@@ -217,6 +217,23 @@ describe('premiereXml: A1 audio track', () => {
     expect(xml).toContain('id="clipitem-a2"');
   });
 
+  test('A1 clips carry no Audio Levels filter at the default 0 dB', () => {
+    const xml = premiereXml(makeSeq());
+    expect(xml).toContain('id="clipitem-a1"');
+    expect(xml).not.toContain('<name>Audio Levels</name>');
+  });
+
+  test('A1 clips take sourceAudioGainDb as their Audio Levels value', () => {
+    const xml = premiereXml(makeSeq({ sourceAudioGainDb: -12 }));
+    const a1 = xml.match(/<clipitem id="clipitem-a1">([\s\S]*?)<\/clipitem>/)?.[1] ?? '';
+    // -12 dB → 10^(-12/20) = 0.25119
+    expect(a1).toContain('<name>Audio Levels</name>');
+    expect(a1).toContain('<value>0.25119</value>');
+    // The video clip itself has no level filter.
+    const v1 = xml.match(/<clipitem id="clipitem-v1">([\s\S]*?)<\/clipitem>/)?.[1] ?? '';
+    expect(v1).not.toContain('Audio Levels');
+  });
+
   test('A1 track is absent (no audio clipitems at all) when sourceAudioMuted=true', () => {
     const f = makeFile({ hasAudio: true });
     const seq = makeSeq({ sourceAudioMuted: true, clips: [{ file: f, startFrame: 0 }] });

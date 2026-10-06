@@ -365,6 +365,20 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
     expect(xml).toContain('id="clipitem-a1"');
   }, 120_000);
 
+  test('A1 sits at -12 dB when the composition has voice "none", as the render mixes it', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const xml = await exportXml(buildExportComposition('asset:clip-001', 3, CANVAS));
+    const a1 = xml.match(/<clipitem id="clipitem-a1">([\s\S]*?)<\/clipitem>/)?.[1] ?? '';
+    expect(a1).toContain('<value>0.25119</value>');
+  }, 120_000);
+
+  test('A1 keeps 0 dB when the composition has voice "original"', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const xml = await exportXml({ ...buildExportComposition('asset:clip-001', 3, CANVAS), voice: 'original' });
+    expect(xml).toContain('id="clipitem-a1"');
+    expect(xml).not.toContain('<name>Audio Levels</name>');
+  }, 120_000);
+
   test('A1 is empty when the composition mutes the source audio (segments[].has_audio=false)', async () => {
     if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
     const comp = buildExportComposition('asset:clip-001', 3, CANVAS);

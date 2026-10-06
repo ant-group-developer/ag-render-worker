@@ -384,6 +384,8 @@ async function handleExportPremiere(
     overlays,
     music: musicEntry,
     sourceAudioMuted,
+    // With no voice the render keeps the videos' sound as a bed at -12 dB (`buildVoiceGraph` in @harness/core).
+    sourceAudioGainDb: composition.voice === 'none' ? -12 : 0,
     markers,
   };
 
