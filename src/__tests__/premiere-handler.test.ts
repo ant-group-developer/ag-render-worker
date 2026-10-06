@@ -241,6 +241,7 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
   let testDir: string;
   let assetVideoPath: string;
   let musicPath: string;
+  let voicePath: string;
   let ffmpegOk = false;
 
   const CANVAS = { width: 320, height: 180 };
@@ -268,6 +269,10 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
       musicPath = join(testDir, 'music.wav');
       await execFileAsync(FFMPEG, [
         '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2', '-y', musicPath,
+      ], { timeout: 30_000 });
+      voicePath = join(testDir, 'L001.wav');
+      await execFileAsync(FFMPEG, [
+        '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=48000:duration=1', '-y', voicePath,
       ], { timeout: 30_000 });
     }
   }, 60_000);
@@ -340,6 +345,11 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
 
   /** Runs the handler on `comp` (one 3 s clip with sound, `asset:clip-001`) and returns the project.xml it built. */
   async function exportXml(comp: ReturnType<typeof buildExportComposition>, extraInputs: Record<string, string> = {}): Promise<string> {
+    return (await exportRun(comp, extraInputs)).xml;
+  }
+
+  /** Same, also returning the work dir and the uploaded premiere.json. */
+  async function exportRun(comp: unknown, extraInputs: Record<string, string> = {}) {
     const sign = new FakeSignClient();
     const store = new FakeUploadStore();
     const workDir = join(testDir, `run-xml-${randomUUID()}`);
@@ -356,8 +366,88 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
     const ctx = buildFakeCtx(workDir, payload, sign, store);
     const { makeStudioExportPremiereHandler } = await import('../premiere-handler.js');
     await makeStudioExportPremiereHandler({})(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
-    return readFileSync(join(workDir, 'project.xml'), 'utf8');
+    return {
+      xml: readFileSync(join(workDir, 'project.xml'), 'utf8'),
+      workDir,
+      manifest: store.jsonUploads.get('premiere.json') as { files: { path: string }[]; warnings: string[] },
+    };
   }
+
+  /** The direct children of one clipitem/transitionitem, by tag. */
+  function item(xml: string, re: RegExp): Record<string, string> {
+    const body = xml.match(re)?.[1] ?? '';
+    const out: Record<string, string> = {};
+    for (const m of body.matchAll(/^ {12}<(\w+)>([^<]*)<\/\1>/gm)) out[m[1]!] ??= m[2]!;
+    return out;
+  }
+  const clipitem = (xml: string, id: string) => item(xml, new RegExp(`<clipitem id="${id}">([\\s\\S]*?)</clipitem>`));
+
+  /** What `timelineToComposition` sends for a shot-cut episode: three shots of the one 3 s video, a dissolve, a
+   * dip to black, one narration line with its subtitle, and music ducked under it. */
+  function cutComposition() {
+    const base = buildExportComposition('asset:clip-001', 2.4, CANVAS);
+    const seg = base.segments[0]!;
+    return {
+      ...base,
+      voice: 'tts',
+      segments: [
+        { ...seg, order: 0, in: 0.4, out: 1.2, start: 0, end: 0.8, transition_out: { kind: 'dissolve', seconds: 0.4, tail_available: true } },
+        { ...seg, order: 1, in: 1.6, out: 2.4, start: 0.8, end: 1.6, transition_out: { kind: 'dip_black', seconds: 0.4, tail_available: false } },
+        { ...seg, order: 2, in: 0, out: 0.8, start: 1.6, end: 2.4, transition_out: { kind: 'cut', seconds: 0.4, tail_available: false } },
+      ],
+      narration: [{ line_id: 'L001', wav: 'stage:voice/L001.wav', start: 0.3, end: 1.3 }],
+      captions: { mode: 'burn-in', cues: [{ index: 1, start: 0.3, end: 1.3, lines: ['Chợ nổi'], raise_px: 0, words: [] }] },
+      music: {
+        track_id: '01MUSIC', path: 'stage:music.wav', loop: true, fade_in: 0, fade_out: 0,
+        cues: [{ start: 0, end: 2.4, gain_db: -18 }],
+        duck: { windows: [{ start: 0.3, end: 1.3 }], gain_db: -8, attack_ms: 200, release_ms: 500 },
+      },
+      transitions: { requested: 2, applied: 2, downgraded: [] },
+    };
+  }
+
+  test('a shot-cut episode: clips play their in/out of the one file, with the dissolve and the dip on V1', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const { xml } = await exportRun(cutComposition(), { 'stage:voice/L001.wav': voicePath, 'stage:music.wav': musicPath });
+    // 25 fps: shots [10,30) [40,60) [0,20) of the 75-frame file at 0, 20, 40 of the sequence.
+    expect(clipitem(xml, 'clipitem-v1')).toMatchObject({ start: '0', end: '-1', in: '10', out: '30', duration: '75' });
+    expect(clipitem(xml, 'clipitem-v2')).toMatchObject({ start: '-1', end: '-1', in: '40', out: '60' });
+    expect(clipitem(xml, 'clipitem-v3')).toMatchObject({ start: '-1', end: '60', in: '0', out: '20' });
+    expect(xml.match(/<file id="[^"]+">/g)?.filter((f) => f.includes('src_'))).toHaveLength(1);
+    const transitions = [...xml.matchAll(/<transitionitem>([\s\S]*?)<\/transitionitem>/g)].map((m) => m[1]!);
+    expect(transitions).toHaveLength(2);
+    expect(transitions[0]).toMatch(/<start>20<\/start>\s*<end>30<\/end>\s*<alignment>start<\/alignment>[\s\S]*Cross Dissolve/);
+    expect(transitions[1]).toMatch(/<start>35<\/start>\s*<end>45<\/end>\s*<alignment>center<\/alignment>[\s\S]*Dip to Color Dissolve/);
+  }, 120_000);
+
+  test('a tts episode: no source sound, the narration on A3, the music ducked under it', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const { xml, manifest } = await exportRun(cutComposition(), { 'stage:voice/L001.wav': voicePath, 'stage:music.wav': musicPath });
+    // The render plays only the narration when the voice is tts, even though the segments keep has_audio.
+    expect(xml).not.toContain('clipitem-a');
+    // 0.3 s → frame 8; the 1 s WAV is 25 frames.
+    expect(clipitem(xml, 'clipitem-n1')).toMatchObject({ start: '8', end: '33', in: '0', out: '25' });
+    expect(xml).toContain('<pathurl>media/voice-L001.wav</pathurl>');
+    expect(manifest.files.map((f) => f.path)).toContain('media/voice-L001.wav');
+    // -18 dB = 0.12589, ducked by -8 dB = 0.05012 from frame 8 (+5 attack) to 33 (+13 release).
+    const kf = [...(xml.match(/<clipitem id="clipitem-m1">([\s\S]*?)<\/clipitem>/)?.[1] ?? '').matchAll(/<when>(\d+)<\/when>\s*<value>([\d.]+)<\/value>/g)]
+      .map((m) => [Number(m[1]), Number(m[2])]);
+    expect(kf).toEqual([[0, 0.12589], [8, 0.12589], [13, 0.05012], [33, 0.05012], [46, 0.12589], [50, 0.12589]]);
+  }, 120_000);
+
+  test('subtitles go in the zip as captions.srt', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const { workDir } = await exportRun(cutComposition(), { 'stage:voice/L001.wav': voicePath, 'stage:music.wav': musicPath });
+    expect(readFileSync(join(workDir, 'captions.srt'), 'utf8')).toBe('1\n00:00:00,300 --> 00:00:01,300\nChợ nổi\n');
+  }, 120_000);
+
+  test('a whole-video episode plays each file from start to end, with no captions.srt', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const { xml, workDir } = await exportRun(buildExportComposition('asset:clip-001', 3, CANVAS));
+    expect(clipitem(xml, 'clipitem-v1')).toMatchObject({ start: '0', end: '75', in: '0', out: '75', duration: '75' });
+    expect(xml).not.toContain('<transitionitem>');
+    expect(existsSync(join(workDir, 'captions.srt'))).toBe(false);
+  }, 120_000);
 
   test('A1 carries the videos\' sound when the composition keeps it', async () => {
     if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }

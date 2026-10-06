@@ -1,7 +1,7 @@
 /**
  * Handler studio.export_premiere:
- * Download composition → download media → probe → render overlay PNGs →
- * build project.xml + README + premiere.json → zip → upload.
+ * Download composition → download media (videos, music, narration) → probe → render overlay PNGs →
+ * build project.xml + README (+ captions.srt) + premiere.json → zip → upload.
  *
  * Progress: 5–70 download, 70–75 overlays, 75–90 zip, 90–100 upload.
  */
@@ -24,8 +24,11 @@ import {
   premiereXml,
   PREMIERE_README_VI,
   secondsToFrames,
+  captionsSrt,
+  type PremiereClip,
   type PremiereFile,
   type PremiereSequence,
+  type PremiereTransition,
 } from './premiere-xml.js';
 
 // ---- Zip with yazl ----
@@ -143,7 +146,7 @@ async function handleExportPremiere(
   });
 
   // Sign all asset inputs to get metadata (source_kind, watermarked, cache_key)
-  const totalAssets = assetInputs.length + (composition.music ? 1 : 0);
+  const totalAssets = assetInputs.length + (composition.music ? 1 : 0) + (composition.voice === 'tts' ? composition.narration.length : 0);
   let downloadedCount = 0;
 
   for (let i = 0; i < assetInputs.length; i++) {
@@ -187,6 +190,17 @@ async function handleExportPremiere(
     ctx.progress(5 + Math.round(60 * (downloadedCount / Math.max(1, totalAssets))), 'download_music');
   }
 
+  // Download the narration (`stage:voice/<line_id>.wav`, uploaded with the job); the render drops it unless the voice is tts.
+  const narrationLocal = new Map<string, string>(); // line_id → local path
+  for (const line of composition.voice === 'tts' ? composition.narration : []) {
+    if (ctx.signal.aborted) throw new Error('Job aborted');
+    const localPath = join(mediaDir, `voice-${slugify(line.line_id)}${extname(line.wav) || '.wav'}`);
+    await ctx.download(line.wav, localPath);
+    narrationLocal.set(line.line_id, localPath);
+    downloadedCount++;
+    ctx.progress(5 + Math.round(60 * (downloadedCount / Math.max(1, totalAssets))), 'download_narration');
+  }
+
   ctx.progress(65, 'probe_media');
 
   // 4. Probe all media files
@@ -227,35 +241,73 @@ async function handleExportPremiere(
 
   ctx.progress(68, 'build_sequence');
 
-  // 5. Build Premiere sequence (V1 clips in order)
-  const clips: PremiereSequence['clips'] = [];
-  let timelineCursor = 0;
+  // 5. Build Premiere sequence (V1 clips in order). Each segment plays `[in, out)` of its file at `[start, end)` of
+  // the episode; a dissolve also plays `seconds` of the file after `out` (its tail), so the file must reach that far.
+  const placed = segments.flatMap((seg) => {
+    if (!seg.source_path.startsWith('asset:') || !downloadedMedia.has(seg.source_path)) return [];
+    const startFrame = secondsToFrames(seg.start, fps);
+    const length = Math.max(1, secondsToFrames(seg.end, fps) - startFrame);
+    const inFrame = secondsToFrames(seg.in, fps);
+    const t = seg.transition_out;
+    const transitionOut: PremiereTransition | null =
+      t.kind === 'dissolve' && t.tail_available ? { kind: 'dissolve', frames: Math.max(1, secondsToFrames(t.seconds, fps)) }
+        : t.kind === 'dip_black' ? { kind: 'dip_black', frames: Math.max(1, secondsToFrames(t.seconds, fps)) }
+          : null;
+    return [{ seg, startFrame, inFrame, outFrame: inFrame + length, transitionOut }];
+  });
 
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i]!;
-    const inputName = seg.source_path;
-    if (!inputName.startsWith('asset:')) continue; // skip non-asset segments
+  // A file is declared once in the XML, with the length of the media; a clip never asks past it.
+  const fileFrames = new Map<string, number>();
+  for (const p of placed) {
+    const tail = p.transitionOut?.kind === 'dissolve' ? p.transitionOut.frames : 0;
+    fileFrames.set(p.seg.source_path, Math.max(fileFrames.get(p.seg.source_path) ?? 0, p.outFrame + tail));
+  }
+  for (const [inputName, needed] of fileFrames) {
+    const have = probed.get(inputName)?.durationFrames ?? 0;
+    if (needed - have > fps / 2) warnings.push(`${inputName}: clips use ${needed} frames, the file has ${have}`);
+    fileFrames.set(inputName, Math.max(needed, have));
+  }
 
-    const localPath = downloadedMedia.get(inputName);
-    if (!localPath) continue;
-
+  const clips: PremiereSequence['clips'] = placed.map((p, i) => {
+    const inputName = p.seg.source_path;
+    const localPath = downloadedMedia.get(inputName)!;
     const info = probed.get(inputName) ?? { durationFrames: fps * 5, width: canvasW, height: canvasH, hasAudio: false };
-    // Clip duration is the used portion (seg.out - seg.in)
-    const clipDurationFrames = Math.max(1, Math.round((seg.out - seg.in) * fps));
-    const relPath = `media/${basename(localPath)}`;
-
     const premiereFile: PremiereFile = {
-      key: seg.source_id ?? inputName,
+      key: p.seg.source_id ?? inputName,
       name: basename(localPath),
-      path: relPath,
-      durationFrames: clipDurationFrames,
+      path: `media/${basename(localPath)}`,
+      durationFrames: fileFrames.get(inputName)!,
       width: info.width || canvasW,
       height: info.height || canvasH,
       hasAudio: info.hasAudio,
     };
+    // A transition needs the next clip right after this one (Studio never leaves a gap).
+    const next = placed[i + 1];
+    const adjacent = next !== undefined && next.startFrame === p.startFrame + p.outFrame - p.inFrame;
+    return {
+      file: premiereFile,
+      startFrame: p.startFrame,
+      inFrame: p.inFrame,
+      outFrame: p.outFrame,
+      transitionOut: adjacent ? p.transitionOut : null,
+    };
+  });
 
-    clips.push({ file: premiereFile, startFrame: timelineCursor });
-    timelineCursor += clipDurationFrames;
+  // A3: one clip per narration line, the whole WAV from the line's start.
+  const narration: PremiereClip[] = [];
+  for (const line of composition.voice === 'tts' ? composition.narration : []) {
+    const localPath = narrationLocal.get(line.line_id);
+    if (!localPath) continue;
+    let fileFramesN = Math.max(1, secondsToFrames(line.end - line.start, fps));
+    try {
+      fileFramesN = Math.max(1, Math.round((await probeMedia(localPath, ffprobe)).duration_seconds * fps));
+    } catch (e) {
+      warnings.push(`Failed to probe narration ${line.line_id}: ${String(e)}`);
+    }
+    narration.push({
+      file: { key: `voice-${line.line_id}`, name: basename(localPath), path: `media/${basename(localPath)}`, durationFrames: fileFramesN, width: 0, height: 0, hasAudio: true },
+      startFrame: secondsToFrames(line.start, fps),
+    });
   }
 
   ctx.progress(70, 'render_overlays');
@@ -340,8 +392,6 @@ async function handleExportPremiere(
   ctx.progress(75, 'build_xml');
 
   // 7. Build Premiere XML
-  const totalFrames = clips.reduce((end, c) => Math.max(end, c.startFrame + c.file.durationFrames), 0);
-
   // Music file entry
   let musicEntry: PremiereSequence['music'] = null;
   if (composition.music && musicLocalPath && musicProbed) {
@@ -361,6 +411,13 @@ async function handleExportPremiere(
       gainDb: composition.music.cues[0]?.gain_db ?? -18,
       fadeInFrames: secondsToFrames(composition.music.fade_in, fps),
       fadeOutFrames: secondsToFrames(composition.music.fade_out, fps),
+      // The render ducks the music under the voice (sidechain); Premiere gets the plan's windows as keyframes.
+      duck: composition.voice === 'none' ? null : {
+        windows: composition.music.duck.windows.map((w) => ({ startFrame: secondsToFrames(w.start, fps), endFrame: secondsToFrames(w.end, fps) })),
+        gainDb: composition.music.duck.gain_db,
+        attackFrames: secondsToFrames(composition.music.duck.attack_ms / 1000, fps),
+        releaseFrames: secondsToFrames(composition.music.duck.release_ms / 1000, fps),
+      },
     };
   }
 
@@ -371,9 +428,10 @@ async function handleExportPremiere(
   }));
 
   // Studio writes the timeline's `source_audio.muted` as `has_audio: false` on every segment
-  // (`timelineToComposition`), and the render then drops their sound: A1 follows.
+  // (`timelineToComposition`), and the render then drops their sound; with a tts voice the render plays only the
+  // narration (`buildVoiceGraph` in @harness/core). A1 follows.
   const assetSegments = segments.filter((s) => s.source_path.startsWith('asset:'));
-  const sourceAudioMuted = assetSegments.length > 0 && assetSegments.every((s) => !s.has_audio);
+  const sourceAudioMuted = composition.voice === 'tts' || (assetSegments.length > 0 && assetSegments.every((s) => !s.has_audio));
 
   const seq: PremiereSequence = {
     name: payload.name,
@@ -386,12 +444,17 @@ async function handleExportPremiere(
     sourceAudioMuted,
     // With no voice the render keeps the videos' sound as a bed at -12 dB (`buildVoiceGraph` in @harness/core).
     sourceAudioGainDb: composition.voice === 'none' ? -12 : 0,
+    narration,
     markers,
   };
 
   const xmlContent = premiereXml(seq);
   const xmlPath = join(workDir, 'project.xml');
   writeFileSync(xmlPath, xmlContent, 'utf8');
+
+  // Subtitles: the render burns them in; Premiere imports them as a caption track.
+  const captionsPath = composition.captions.mode !== 'none' && composition.captions.cues.length > 0 ? join(workDir, 'captions.srt') : null;
+  if (captionsPath) writeFileSync(captionsPath, captionsSrt(composition.captions.cues), 'utf8');
 
   // README
   const readmePath = join(workDir, 'README.txt');
@@ -433,6 +496,12 @@ async function handleExportPremiere(
     });
   }
 
+  for (const localPath of narrationLocal.values()) {
+    const zipEntryName = `media/${basename(localPath)}`;
+    zipFile.addFile(localPath, zipEntryName, { compress: false });
+    manifestFiles.push({ path: zipEntryName, size_bytes: statSync(localPath).size, source_kind: 'original', watermarked: false });
+  }
+
   // Add overlay PNGs (store — PNG is already compressed)
   for (const ov of overlays) {
     const pngPath = join(workDir, 'overlays', basename(ov.path));
@@ -444,6 +513,7 @@ async function handleExportPremiere(
   // Add text files (deflate)
   zipFile.addFile(xmlPath, 'project.xml', { compress: true });
   zipFile.addFile(readmePath, 'README.txt', { compress: true });
+  if (captionsPath) zipFile.addFile(captionsPath, 'captions.srt', { compress: true });
 
   // End the zip (signals no more entries)
   zipFile.end({ forceZip64Format: true });

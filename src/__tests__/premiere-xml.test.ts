@@ -19,6 +19,7 @@ import {
   escapeXml,
   pathUrl,
   PREMIERE_README_VI,
+  captionsSrt,
   type PremiereFile,
   type PremiereSequence,
 } from '../premiere-xml.js';
@@ -371,6 +372,168 @@ describe('premiereXml: overlays track', () => {
   test('no V2 track when overlays is empty', () => {
     const xml = premiereXml(makeSeq({ overlays: [] }));
     expect(xml).not.toContain('clipitem-t');
+  });
+});
+
+// ---- Trimmed clips and transitions (timeline v4) ----
+
+/** The direct children of one clipitem/transitionitem, by tag. */
+function item(xml: string, tag: 'clipitem' | 'transitionitem', id?: string): Record<string, string> {
+  const re = id ? new RegExp(`<${tag} id="${id}">([\\s\\S]*?)</${tag}>`) : new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`);
+  const body = xml.match(re)?.[1] ?? '';
+  const out: Record<string, string> = {};
+  for (const m of body.matchAll(/^ {12}<(\w+)>([^<]*)<\/\1>/gm)) out[m[1]!] ??= m[2]!;
+  return out;
+}
+
+describe('premiereXml: trimmed clips', () => {
+  // One 250-frame file cut into two shots: [10, 30) and [100, 160).
+  const f = makeFile({ key: 'src', durationFrames: 250 });
+  const clips = [
+    { file: f, startFrame: 0, inFrame: 10, outFrame: 30 },
+    { file: f, startFrame: 20, inFrame: 100, outFrame: 160 },
+  ];
+
+  test('each clip plays its in/out of the file, placed back to back', () => {
+    const xml = premiereXml(makeSeq({ clips }));
+    expect(() => parse(xml)).not.toThrow();
+    expect(item(xml, 'clipitem', 'clipitem-v1')).toMatchObject({ start: '0', end: '20', in: '10', out: '30', duration: '250' });
+    expect(item(xml, 'clipitem', 'clipitem-v2')).toMatchObject({ start: '20', end: '80', in: '100', out: '160', duration: '250' });
+    // Sequence length is the sum of the shots, not of the files.
+    expect(xml).toMatch(/<sequence id="sequence-1">\s*<name>Test Sequence<\/name>\s*<duration>80<\/duration>/);
+  });
+
+  test('the file is declared once with its full length', () => {
+    const xml = premiereXml(makeSeq({ clips }));
+    expect(xml.match(/<file id="file-src">/g)).toHaveLength(1);
+    expect(xml).toMatch(/<file id="file-src">\s*<name>clip.mp4<\/name>\s*<pathurl>media\/clip.mp4<\/pathurl>\s*<rate>[\s\S]*?<\/rate>\s*<duration>250<\/duration>/);
+  });
+
+  test('A1 follows the trimmed V1 clips', () => {
+    const xml = premiereXml(makeSeq({ clips }));
+    expect(item(xml, 'clipitem', 'clipitem-a2')).toMatchObject({ start: '20', end: '80', in: '100', out: '160' });
+  });
+});
+
+describe('premiereXml: transitions', () => {
+  const f1 = makeFile({ key: 'a', name: 'a.mp4', path: 'media/a.mp4', durationFrames: 250 });
+  const f2 = makeFile({ key: 'b', name: 'b.mp4', path: 'media/b.mp4', durationFrames: 250 });
+
+  test('a dissolve starts at the cut, uses the outgoing tail, and leaves both clips where they are', () => {
+    const xml = premiereXml(makeSeq({
+      clips: [
+        { file: f1, startFrame: 0, inFrame: 10, outFrame: 60, transitionOut: { kind: 'dissolve', frames: 10 } },
+        { file: f2, startFrame: 50, inFrame: 0, outFrame: 40 },
+      ],
+    }));
+    expect(() => parse(xml)).not.toThrow();
+    // FCP7: start/end next to a transition are -1, in/out stay at the edit point.
+    expect(item(xml, 'clipitem', 'clipitem-v1')).toMatchObject({ start: '0', end: '-1', in: '10', out: '60' });
+    expect(item(xml, 'clipitem', 'clipitem-v2')).toMatchObject({ start: '-1', end: '90', in: '0', out: '40' });
+    expect(item(xml, 'transitionitem')).toMatchObject({ start: '50', end: '60', alignment: 'start' });
+    expect(xml).toContain('<effectid>Cross Dissolve</effectid>');
+    // Between the two clips on V1.
+    expect(xml.indexOf('<transitionitem>')).toBeGreaterThan(xml.indexOf('id="clipitem-v1"'));
+    expect(xml.indexOf('<transitionitem>')).toBeLessThan(xml.indexOf('id="clipitem-v2"'));
+    // A1 keeps plain positions.
+    expect(item(xml, 'clipitem', 'clipitem-a1')).toMatchObject({ start: '0', end: '50' });
+    expect(item(xml, 'clipitem', 'clipitem-a2')).toMatchObject({ start: '50', end: '90' });
+  });
+
+  test('a dip to black is centred on the cut and is black', () => {
+    const xml = premiereXml(makeSeq({
+      clips: [
+        { file: f1, startFrame: 0, inFrame: 0, outFrame: 50, transitionOut: { kind: 'dip_black', frames: 10 } },
+        { file: f2, startFrame: 50, inFrame: 20, outFrame: 70 },
+      ],
+    }));
+    expect(() => parse(xml)).not.toThrow();
+    expect(item(xml, 'transitionitem')).toMatchObject({ start: '45', end: '55', alignment: 'center' });
+    expect(xml).toContain('<effectid>Dip to Color Dissolve</effectid>');
+    expect(xml).toMatch(/<parameterid>color<\/parameterid>[\s\S]*?<alpha>255<\/alpha>\s*<red>0<\/red>\s*<green>0<\/green>\s*<blue>0<\/blue>/);
+  });
+
+  test('a transition on the last clip is ignored', () => {
+    const xml = premiereXml(makeSeq({ clips: [{ file: f1, startFrame: 0, outFrame: 50, transitionOut: { kind: 'dissolve', frames: 10 } }] }));
+    expect(xml).not.toContain('<transitionitem>');
+    expect(item(xml, 'clipitem', 'clipitem-v1')).toMatchObject({ start: '0', end: '50' });
+  });
+
+  test('cuts write no transition', () => {
+    const xml = premiereXml(makeSeq({ clips: [{ file: f1, startFrame: 0, outFrame: 50 }, { file: f2, startFrame: 50, outFrame: 50 }] }));
+    expect(xml).not.toContain('<transitionitem>');
+    expect(xml).not.toContain('<end>-1</end>');
+  });
+});
+
+describe('premiereXml: narration (A3)', () => {
+  const voice = (n: number, durationFrames: number): PremiereFile =>
+    ({ key: `voice-L00${n}`, name: `voice-L00${n}.wav`, path: `media/voice-L00${n}.wav`, durationFrames, width: 0, height: 0, hasAudio: true });
+
+  test('one clip per line at its start, playing the whole WAV, on the track after the music', () => {
+    const musicFile = makeFile({ key: 'm', name: 'music.mp3', path: 'media/music.mp3', durationFrames: 500, width: 0, height: 0 });
+    const xml = premiereXml(makeSeq({
+      sourceAudioMuted: true,
+      music: { file: musicFile, gainDb: -18 },
+      narration: [{ file: voice(1, 40), startFrame: 8 }, { file: voice(2, 20), startFrame: 60 }],
+    }));
+    expect(() => parse(xml)).not.toThrow();
+    expect(item(xml, 'clipitem', 'clipitem-n1')).toMatchObject({ start: '8', end: '48', in: '0', out: '40', duration: '40' });
+    expect(item(xml, 'clipitem', 'clipitem-n2')).toMatchObject({ start: '60', end: '80' });
+    expect(xml).not.toMatch(/clipitem-n1[\s\S]*Audio Levels[\s\S]*clipitem-n2/);
+    // Tracks in <audio>: A1 (empty, muted), A2 music, A3 narration.
+    const audio = xml.slice(xml.indexOf('<audio>\n'));
+    const tracks = audio.split('<track>').slice(1);
+    expect(tracks).toHaveLength(3);
+    expect(tracks[1]).toContain('clipitem-m1');
+    expect(tracks[2]).toContain('clipitem-n1');
+  });
+
+  test('no narration track without lines', () => {
+    const xml = premiereXml(makeSeq({ narration: [] }));
+    expect(xml).not.toContain('clipitem-n');
+  });
+});
+
+describe('premiereXml: music ducking', () => {
+  const musicFile: PremiereFile = { key: 'm', name: 'music.mp3', path: 'media/music.mp3', durationFrames: 200, width: 0, height: 0, hasAudio: true };
+
+  test('the music drops by duck.gainDb under each window, with attack and release ramps', () => {
+    // Sequence 100 frames; window [20, 50], -6 dB (0.50119), attack 5, release 10.
+    const xml = premiereXml(makeSeq({
+      clips: [{ file: makeFile({ durationFrames: 100, hasAudio: false }), startFrame: 0 }],
+      music: { file: musicFile, gainDb: 0, duck: { windows: [{ startFrame: 20, endFrame: 50 }], gainDb: -6, attackFrames: 5, releaseFrames: 10 } },
+    }));
+    expect(keyframes(xml, 'clipitem-m1')).toEqual([[0, 1], [20, 1], [25, 0.50119], [50, 0.50119], [60, 1], [100, 1]]);
+  });
+
+  test('ducking multiplies the music level and its fades', () => {
+    // -18 dB = 0.12589, fade-in 10; window [5, 30] at -6 dB: at frame 10 the fade is done and the duck is full.
+    const xml = premiereXml(makeSeq({
+      clips: [{ file: makeFile({ durationFrames: 100, hasAudio: false }), startFrame: 0 }],
+      music: { file: musicFile, gainDb: -18, fadeInFrames: 10, duck: { windows: [{ startFrame: 5, endFrame: 30 }], gainDb: -6, attackFrames: 5, releaseFrames: 5 } },
+    }));
+    const kf = new Map(keyframes(xml, 'clipitem-m1'));
+    expect(kf.get(10)).toBe(0.0631); // 0.12589 × 0.50119
+    expect(kf.get(35)).toBe(0.12589);
+  });
+
+  test('no keyframes for empty windows', () => {
+    const xml = premiereXml(makeSeq({ music: { file: musicFile, gainDb: -6, duck: { windows: [], gainDb: -8, attackFrames: 5, releaseFrames: 12 } } }));
+    expect(xml).not.toContain('<keyframe>');
+  });
+});
+
+describe('captionsSrt', () => {
+  test('numbers the cues and writes SubRip times', () => {
+    expect(captionsSrt([
+      { start: 0.3, end: 2.05, lines: ['Chợ nổi Cái Răng', 'họp từ sáng sớm'] },
+      { start: 3661.5, end: 3663, lines: ['Một dòng'] },
+    ])).toBe('1\n00:00:00,300 --> 00:00:02,050\nChợ nổi Cái Răng\nhọp từ sáng sớm\n\n2\n01:01:01,500 --> 01:01:03,000\nMột dòng\n');
+  });
+
+  test('empty for no cues', () => {
+    expect(captionsSrt([])).toBe('');
   });
 });
 
