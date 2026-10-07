@@ -34,6 +34,8 @@ export interface TtsEngineJob {
   language: string;
   ref_audio: string;
   ref_text: string;
+  /** OmniVoice voice design when there is no `ref_audio` (e.g. "female, young adult"). */
+  instruct?: string | null;
   align: boolean;
   lines: Array<{
     line_id: string;

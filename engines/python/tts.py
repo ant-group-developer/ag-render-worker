@@ -3,8 +3,10 @@ short-lived child process:
 
     python tts.py --job <job.json> --result <result.json> [--dry-run]
 
-Job:    { device, model, dtype, num_step, speed, language, ref_audio, ref_text, align,
+Job:    { device, model, dtype, num_step, speed, language, ref_audio, ref_text, instruct?, align,
           lines: [{ line_id, chunks: [string], out_path, pause_seconds }] }
+        `ref_audio` (a WAV to clone) or `instruct` (OmniVoice voice design, e.g. "female, young adult, moderate pitch")
+        says whose voice reads; with neither the job is refused.
 Result: { ok: true, lines: [{ line_id, wav_path, duration_seconds, chunks: [{text,start,end}],
           words: [...] | null, alignment }] }
       | { ok: false, kind: "contract" | "transient", reason }
@@ -50,6 +52,8 @@ def validate_job(job: dict[str, Any]) -> str | None:
     for key in ("device", "model", "dtype", "num_step", "speed", "language", "ref_audio", "ref_text", "align", "lines"):
         if key not in job:
             return f"job missing required field: {key}"
+    if not job["ref_audio"] and not (job.get("instruct") or "").strip():
+        return "job needs ref_audio (a voice to clone) or instruct (a voice to design)"
     if job["dtype"] not in SUPPORTED_DTYPES:
         return f"job.dtype must be one of {sorted(SUPPORTED_DTYPES)}, got: {job['dtype']!r}"
     if not isinstance(job["lines"], list):
@@ -99,7 +103,14 @@ def dry_run(job: dict[str, Any], result_path: str) -> None:
     write_result(result_path, {"ok": True, "lines": lines_out})
 
 
-def _generate_chunk(model: Any, np_mod: Any, text: str, ref_audio: str, ref_text: str, num_step: int, speed: float, language: str | None) -> Any:
+def _voice_kwargs(ref_audio: str, ref_text: str, instruct: str | None) -> dict[str, Any]:
+    """Clone `ref_audio` (with its words, when known) or, without one, design the voice from `instruct`."""
+    if ref_audio:
+        return {"ref_audio": ref_audio, "ref_text": ref_text}
+    return {"instruct": instruct}
+
+
+def _generate_chunk(model: Any, np_mod: Any, text: str, ref_audio: str, ref_text: str, num_step: int, speed: float, language: str | None, instruct: str | None = None) -> Any:
     """Reads one chunk, retrying up to `MAX_CHUNK_ATTEMPTS - 1` more times when OmniVoice produced empty or
     NaN-containing audio (spec: "chunk có độ dài 0 hoặc nan → đọc lại tối đa 2 lần").
 
@@ -111,7 +122,7 @@ def _generate_chunk(model: Any, np_mod: Any, text: str, ref_audio: str, ref_text
     last_error: Exception | None = None
     for _attempt in range(MAX_CHUNK_ATTEMPTS):
         try:
-            raw = model.generate(text=text, language=language, ref_audio=ref_audio, ref_text=ref_text, num_step=num_step, speed=speed)[0]
+            raw = model.generate(text=text, language=language, num_step=num_step, speed=speed, **_voice_kwargs(ref_audio, ref_text, instruct))[0]
         except Exception as e:
             last_error = e
             continue
@@ -122,7 +133,7 @@ def _generate_chunk(model: Any, np_mod: Any, text: str, ref_audio: str, ref_text
     raise last_error if last_error is not None else RuntimeError("chunk generation failed")
 
 
-def _synth_line(model: Any, np_mod: Any, line: dict[str, Any], ref_audio: str, ref_text: str, num_step: int, speed: float, language: str | None) -> tuple[Any, list[dict[str, Any]]]:
+def _synth_line(model: Any, np_mod: Any, line: dict[str, Any], ref_audio: str, ref_text: str, num_step: int, speed: float, language: str | None, instruct: str | None = None) -> tuple[Any, list[dict[str, Any]]]:
     pause_seconds = float(line.get("pause_seconds") or 0.0)
     pause_samples = np_mod.zeros(int(round(pause_seconds * SAMPLE_RATE)), dtype=np_mod.float32)
     parts: list[Any] = []
@@ -130,7 +141,7 @@ def _synth_line(model: Any, np_mod: Any, line: dict[str, Any], ref_audio: str, r
     cursor = 0.0
     texts: list[str] = line["chunks"]
     for i, text in enumerate(texts):
-        arr = _generate_chunk(model, np_mod, text, ref_audio, ref_text, num_step, speed, language)
+        arr = _generate_chunk(model, np_mod, text, ref_audio, ref_text, num_step, speed, language, instruct)
         duration = len(arr) / SAMPLE_RATE
         start = cursor
         end = cursor + duration
@@ -146,7 +157,8 @@ def _synth_line(model: Any, np_mod: Any, line: dict[str, Any], ref_audio: str, r
 
 def run(job: dict[str, Any], result_path: str) -> None:
     ref_audio = job["ref_audio"]
-    if not os.path.exists(ref_audio):
+    instruct = (job.get("instruct") or "").strip() or None
+    if ref_audio and not os.path.exists(ref_audio):
         write_result(result_path, {"ok": False, "kind": "contract", "reason": f"ref_audio not found: {ref_audio}"})
         return
 
@@ -173,7 +185,7 @@ def run(job: dict[str, Any], result_path: str) -> None:
     lines_out: list[dict[str, Any]] = []
     try:
         for line in job["lines"]:
-            audio, chunks_out = _synth_line(model, np, line, ref_audio, job["ref_text"], job["num_step"], job["speed"], job["language"])
+            audio, chunks_out = _synth_line(model, np, line, ref_audio, job["ref_text"], job["num_step"], job["speed"], job["language"], instruct)
             out_path = line["out_path"]
             os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
             sf.write(out_path, audio, SAMPLE_RATE)

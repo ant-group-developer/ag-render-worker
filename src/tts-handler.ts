@@ -129,6 +129,8 @@ export function makeStudioTtsHandler(
       language: payload.language,
       ref_audio: refAudioLocalPath || '',
       ref_text: payload.voice.reference_text ?? '',
+      // no sample: the voice is designed from this description (OmniVoice `instruct`)
+      instruct: payload.voice.instruct ?? null,
       align: payload.align_words,
       lines: engineLines,
     };
