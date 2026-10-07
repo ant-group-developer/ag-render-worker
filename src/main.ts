@@ -6,10 +6,11 @@ import { runWorker, loadConfig } from '@ag-farm/worker-sdk';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { getExtra } from './config.js';
+import { capabilitiesOptionsFor, getExtra } from './config.js';
 import { makeStudioTtsHandler } from './tts-handler.js';
 import { makeStudioRenderPreviewHandler, makeStudioRenderFinalHandler } from './render-handler.js';
 import { makeStudioExportPremiereHandler } from './premiere-handler.js';
+import { makeStudioTranscribeHandler } from './transcribe-handler.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -50,15 +51,19 @@ async function main(): Promise<void> {
   const previewHandler = makeStudioRenderPreviewHandler(extra);
   const finalHandler = makeStudioRenderFinalHandler(extra);
   const exportPremiereHandler = makeStudioExportPremiereHandler(extra);
+  const transcribeHandler = makeStudioTranscribeHandler({ extra });
 
   await runWorker({
     config,
     version,
+    // studio.tts and studio.transcribe need python: true, i.e. extra.python_bin imports torch
+    capabilitiesOptions: capabilitiesOptionsFor(extra),
     handlers: {
       'studio.tts': ttHandler,
       'studio.render_preview': previewHandler,
       'studio.render_final': finalHandler,
       'studio.export_premiere': exportPremiereHandler,
+      'studio.transcribe': transcribeHandler,
     },
   });
 }
