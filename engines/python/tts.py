@@ -6,7 +6,9 @@ short-lived child process:
 Job:    { device, model, dtype, num_step, speed, language, ref_audio, ref_text, instruct?, align,
           lines: [{ line_id, chunks: [string], out_path, pause_seconds }] }
         `ref_audio` (a WAV to clone) or `instruct` (OmniVoice voice design, e.g. "female, young adult, moderate pitch")
-        says whose voice reads; with neither the job is refused.
+        says whose voice reads; with neither the job is refused. A sample with no `ref_text` is heard once per job
+        with the WhisperX model `ref_asr_model` (the one `studio.transcribe` uses) when given: OmniVoice clones
+        better knowing what the sample says, and left to itself it would download Whisper and hear it per line.
 Result: { ok: true, lines: [{ line_id, wav_path, duration_seconds, chunks: [{text,start,end}],
           words: [...] | null, alignment }] }
       | { ok: false, kind: "contract" | "transient", reason }
@@ -155,6 +157,43 @@ def _synth_line(model: Any, np_mod: Any, line: dict[str, Any], ref_audio: str, r
     return full, chunks_out
 
 
+def _transcribe_reference(job: dict[str, Any], ref_audio: str) -> str:
+    """The words of the voice sample, heard once with `job["ref_asr_model"]`; "" when there is no model or it fails
+    (the lines are then read without them, as before). Runs before OmniVoice loads: the two rarely share a GPU."""
+    model_name = (job.get("ref_asr_model") or "").strip()
+    if not model_name:
+        return ""
+    try:
+        import torch
+        import whisperx
+
+        import transcribe as _tr
+
+        dev, index = _tr.split_device(job["device"])
+        _tr.allow_vad_checkpoint_globals()
+        compute = job.get("ref_asr_compute_type") or ("float16" if dev == "cuda" else "int8")
+        try:
+            model = whisperx.load_model(model_name, dev, device_index=index, compute_type=compute)
+        except Exception as e:
+            # a GPU build of faster-whisper without efficient float16 (the transcribe stage meets it too): int8 runs anywhere
+            if compute == "int8":
+                raise
+            log("warn", "voice sample ASR falls back to int8", compute_type=compute, reason=str(e))
+            model = whisperx.load_model(model_name, dev, device_index=index, compute_type="int8")
+        out = model.transcribe(whisperx.load_audio(ref_audio), batch_size=8, language=job.get("language"))
+        text = " ".join((seg.get("text") or "").strip() for seg in out.get("segments", [])).strip()
+        del model
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        log("info", "voice sample heard for its words", model=model_name, chars=len(text))
+        return text
+    except Exception as e:
+        log("warn", "could not hear the voice sample's words; reading without them", reason=str(e))
+        return ""
+
+
 def run(job: dict[str, Any], result_path: str) -> None:
     ref_audio = job["ref_audio"]
     instruct = (job.get("instruct") or "").strip() or None
@@ -176,6 +215,10 @@ def run(job: dict[str, Any], result_path: str) -> None:
         write_result(result_path, {"ok": False, "kind": "contract", "reason": f"device {device!r} requested but CUDA is not available"})
         return
 
+    ref_text = job["ref_text"]
+    if ref_audio and not ref_text.strip():
+        ref_text = _transcribe_reference(job, ref_audio)
+
     try:
         model = OmniVoice.from_pretrained(job["model"], device_map=device, dtype=getattr(torch, job["dtype"]))
     except Exception as e:  # model load / download / OOM
@@ -185,7 +228,7 @@ def run(job: dict[str, Any], result_path: str) -> None:
     lines_out: list[dict[str, Any]] = []
     try:
         for line in job["lines"]:
-            audio, chunks_out = _synth_line(model, np, line, ref_audio, job["ref_text"], job["num_step"], job["speed"], job["language"], instruct)
+            audio, chunks_out = _synth_line(model, np, line, ref_audio, ref_text, job["num_step"], job["speed"], job["language"], instruct)
             out_path = line["out_path"]
             os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
             sf.write(out_path, audio, SAMPLE_RATE)

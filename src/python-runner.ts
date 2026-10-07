@@ -36,6 +36,10 @@ export interface TtsEngineJob {
   ref_text: string;
   /** OmniVoice voice design when there is no `ref_audio` (e.g. "female, young adult"). */
   instruct?: string | null;
+  /** WhisperX model that hears a sample's words once when `ref_text` is empty; null: read without them. */
+  ref_asr_model?: string | null;
+  /** Its faster-whisper compute type (the transcribe stage's: `extra.transcribe_compute_type`, else by device). */
+  ref_asr_compute_type?: string | null;
   align: boolean;
   lines: Array<{
     line_id: string;
