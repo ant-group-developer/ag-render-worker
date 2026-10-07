@@ -16,6 +16,11 @@ export interface RenderWorkerExtra {
   ffmpeg_timeout_s?: number;
   /** Thư mục chứa arial.ttf. Mặc định: thư mục font của hệ điều hành (xem fonts.ts). */
   fonts_dir?: string;
+  /**
+   * WhisperX model that hears a voice sample's words once per studio.tts job when Studio sent none (OmniVoice clones
+   * better with them). Default 'large-v3', the model studio.transcribe uses; '' = read without them.
+   */
+  tts_ref_asr_model?: string;
   /** Thiết bị cho TTS: 'auto' (cuda nếu máy có GPU NVIDIA, không thì cpu), 'cuda', 'cpu'. Mặc định: 'auto'. */
   tts_device?: string;
   /** Encoder cho render: 'auto' (NVENC nếu có, không thì CPU), 'nvenc' hoặc 'cpu'. Mặc định: 'auto'. */
