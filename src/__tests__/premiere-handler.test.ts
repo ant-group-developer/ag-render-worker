@@ -349,7 +349,7 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
   }
 
   /** Same, also returning the work dir and the uploaded premiere.json. */
-  async function exportRun(comp: unknown, extraInputs: Record<string, string> = {}) {
+  async function exportRun(comp: unknown, extraInputs: Record<string, string> = {}, payloadExtra: Record<string, unknown> = {}) {
     const sign = new FakeSignClient();
     const store = new FakeUploadStore();
     const workDir = join(testDir, `run-xml-${randomUUID()}`);
@@ -361,7 +361,7 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
     sign.register('stage:comp.json', compPath);
     const payload = {
       production_id: 'prod-xml', episode_id: 'ep-xml', composition: 'stage:comp.json', media: 'proxy',
-      name: 'XML Test', markers: [], output: 'episodes/ep-xml/premiere/job.zip',
+      name: 'XML Test', markers: [], output: 'episodes/ep-xml/premiere/job.zip', ...payloadExtra,
     };
     const ctx = buildFakeCtx(workDir, payload, sign, store);
     const { makeStudioExportPremiereHandler } = await import('../premiere-handler.js');
@@ -478,6 +478,29 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
     // The video stays on V1 and is no longer linked to a sound clip.
     expect(xml).toContain('id="clipitem-v1"');
     expect(xml).not.toContain('<linkclipref>');
+  }, 120_000);
+
+  test('Studio cut 1.1.0: a clip muted on its own has no sound under it on A1; the others keep theirs', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const comp = { ...cutComposition(), voice: 'none', narration: [], captions: { mode: 'none', cues: [] }, music: null };
+    comp.segments = comp.segments.map((s, i) => (i === 1 ? { ...s, has_audio: false } : s));
+    const { xml } = await exportRun(comp, {}, { edit_style: 'cut', audio: 'per_segment' });
+    expect(xml).toContain('id="clipitem-a1"');
+    expect(xml).not.toContain('id="clipitem-a2"');
+    expect(xml).toContain('id="clipitem-a3"');
+  }, 120_000);
+
+  test('Studio cut 1.1.0: the text overlays are drawn in the composition\'s text look', async () => {
+    if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
+    const { findArialFiles } = await import('../fonts.js');
+    if (findArialFiles().length === 0) { console.log('skipping: Arial not installed on this machine'); return; }
+    const look = { text_color: '#FFD166', outline_color: '#000000', box_color: '#1D3557', size: 'm' };
+    const { workDir } = await exportRun({ ...buildExportComposition('asset:clip-001', 3, CANVAS, true), text_style: look });
+    const ass = readFileSync(join(workDir, 'overlay-T001.ass'), 'utf8');
+    const title = ass.split('\n').find((l) => l.startsWith('Style: Title,'))!.split(',');
+    expect(title[3]).toBe('&H0066D1FF');
+    expect(title[5]).toBe(title[6]);
+    expect(existsSync(join(workDir, 'overlays', 'T001.png'))).toBe(true);
   }, 120_000);
 
   test('A2 takes the music level and fades from the composition', async () => {

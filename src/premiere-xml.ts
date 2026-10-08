@@ -43,6 +43,8 @@ export interface PremiereClip {
   outFrame?: number;
   /** Into the next clip, which starts where this one ends. */
   transitionOut?: PremiereTransition | null;
+  /** This clip's own sound is off while others keep theirs (Studio cut 1.1.0, `has_audio: false`): no A1 item. */
+  muted?: boolean;
 }
 
 /** Ducking of A2 under the narration: `gainDb` below the music level inside each window, ramps after its edges. */
@@ -175,7 +177,7 @@ export function premiereXml(seq: PremiereSequence): string {
     .leaf("pixelaspectratio", "square").leaf("fielddominance", "none").close("samplecharacteristics").close("format");
   x.open("track");
   seq.clips.forEach((c, i) => {
-    const withAudio = !seq.sourceAudioMuted && c.file.hasAudio;
+    const withAudio = !seq.sourceAudioMuted && c.file.hasAudio && !c.muted;
     const into = i > 0 ? seq.clips[i - 1]!.transitionOut : null;
     const out = i < seq.clips.length - 1 ? c.transitionOut : null;
     if (into) transitionitem(into, c.startFrame);
@@ -205,7 +207,7 @@ export function premiereXml(seq: PremiereSequence): string {
   x.open("track");
   if (!seq.sourceAudioMuted) {
     seq.clips.forEach((c, i) => {
-      if (!c.file.hasAudio) return;
+      if (!c.file.hasAudio || c.muted) return;
       clipitem(`clipitem-a${i + 1}`, c.file.name, c.startFrame, endOf(c), inOf(c), outOf(c), c.file.durationFrames, () => {
         file(c.file);
         x.open("sourcetrack").leaf("mediatype", "audio").leaf("trackindex", 1).close("sourcetrack");
@@ -289,9 +291,9 @@ export function premiereXml(seq: PremiereSequence): string {
   return x.toString();
 }
 
-/** Position (1-based) of clip i's audio item on A1: only clips with sound have one. */
+/** Position (1-based) of clip i's audio item on A1: only clips with sound, not muted on their own, have one. */
 function audioIndex(seq: PremiereSequence, i: number): number {
-  return seq.clips.slice(0, i + 1).filter((c) => c.file.hasAudio).length;
+  return seq.clips.slice(0, i + 1).filter((c) => c.file.hasAudio && !c.muted).length;
 }
 
 function round5(n: number): number { return Math.round(n * 1e5) / 1e5; }
