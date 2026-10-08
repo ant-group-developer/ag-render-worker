@@ -290,6 +290,8 @@ async function handleExportPremiere(
       inFrame: p.inFrame,
       outFrame: p.outFrame,
       transitionOut: adjacent ? p.transitionOut : null,
+      // a clip muted on its own (Studio cut 1.1.0): the render plays none of its sound, so A1 has nothing under it
+      ...(!p.seg.has_audio ? { muted: true } : {}),
     };
   });
 
@@ -345,6 +347,8 @@ async function handleExportPremiere(
         output: { width: canvasW, height: canvasH, fps, codec: 'h264' },
         captions: { mode: 'none', cues: [] },
         text_events: [{ ...evt, start: 0, end: 9999 }],
+        // the team's text look (Studio cut 1.1.0): the PNG looks as the render draws it
+        ...(composition.text_style ? { text_style: composition.text_style } : {}),
       };
       const ass = studioOverlayAss(miniComp as import('@ag-studio/render').Composition);
       if (!ass) {

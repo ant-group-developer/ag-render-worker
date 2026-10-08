@@ -235,7 +235,29 @@ describe('premiereXml: A1 audio track', () => {
     expect(v1).not.toContain('Audio Levels');
   });
 
-  test('A1 track is absent (no audio clipitems at all) when sourceAudioMuted=true', () => {
+  test('a clip muted on its own (Studio cut 1.1.0) has no A1 item and no link; the others keep theirs, indexed on', () => {
+    const a = makeFile({ key: 'a', name: 'a.mp4', path: 'media/a.mp4', hasAudio: true });
+    const b = makeFile({ key: 'b', name: 'b.mp4', path: 'media/b.mp4', hasAudio: true });
+    const seq = makeSeq({
+      clips: [
+        { file: a, startFrame: 0 },
+        { file: b, startFrame: 75, muted: true },
+        { file: a, startFrame: 150, inFrame: 100, outFrame: 175 },
+      ],
+    });
+    const xml = premiereXml(seq);
+    expect(xml).toContain('id="clipitem-a1"');
+    expect(xml).not.toContain('id="clipitem-a2"');
+    expect(xml).toContain('id="clipitem-a3"');
+    // the muted clip's video item links to no sound
+    const v2 = xml.match(/<clipitem id="clipitem-v2">([\s\S]*?)<\/clipitem>/)?.[1] ?? '';
+    expect(v2).not.toContain('<link>');
+    // clip 3's sound is the second item on A1
+    const v3 = xml.match(/<clipitem id="clipitem-v3">([\s\S]*?)<\/clipitem>/)?.[1] ?? '';
+    expect(v3).toMatch(/<linkclipref>clipitem-a3<\/linkclipref>[\s\S]*?<clipindex>2<\/clipindex>/);
+  });
+
+    test('A1 track is absent (no audio clipitems at all) when sourceAudioMuted=true', () => {
     const f = makeFile({ hasAudio: true });
     const seq = makeSeq({ sourceAudioMuted: true, clips: [{ file: f, startFrame: 0 }] });
     const xml = premiereXml(seq);
