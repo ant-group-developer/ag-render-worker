@@ -2,8 +2,10 @@
 
 Worker dựng video cho AG Studio, chạy trên máy cấu hình cao.
 
-Nhận job từ [ag-farm](../ag-farm) và xử lý ba loại việc:
+Nhận job từ [ag-farm](../ag-farm) và xử lý năm loại việc:
 - `studio.tts` — tổng hợp giọng nói (OmniVoice TTS)
+- `studio.transcribe` — nhận dạng lời nói trong footage (WhisperX), cho kiểu dựng cắt theo shot
+- `studio.export_premiere` — xuất project Adobe Premiere
 - `studio.render_preview` — dựng preview 720p
 - `studio.render_final` — dựng bản gốc chất lượng cao
 
@@ -15,9 +17,10 @@ Nhận job từ [ag-farm](../ag-farm) và xử lý ba loại việc:
 |---|---|---|
 | Node.js | 22 (khuyến nghị 24) | Dùng `corepack enable` để bật pnpm |
 | ffmpeg | 6+ | Cần có trong PATH hoặc đặt `FFMPEG_PATH` |
-| Python | 3.11+ | Chỉ cần cho `studio.tts` |
+| Python | 3.11+ | Cần cho `studio.tts` và `studio.transcribe`; máy chỉ nhận hai loại này khi `extra.python_bin` import được torch |
 | torch + CUDA | torch 2.8.0+cu126 | Cần GPU NVIDIA ≥ RTX 3060 12GB cho TTS thật |
 | OmniVoice | ≥ 0.2.1, < 0.3 | TTS model |
+| WhisperX | ≥ 3.7.4, < 4 | Nhận dạng lời nói (`studio.transcribe`) và căn mốc từ của TTS |
 | Font | Noto Sans (vi) hoặc font của team | Dùng trong render composition |
 
 Máy không có GPU: worker chạy bình thường nhưng TTS sẽ rất chậm (CPU inference).

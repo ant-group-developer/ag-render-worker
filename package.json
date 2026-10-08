@@ -1,8 +1,8 @@
 {
   "name": "@ag-farm/ag-render-worker",
-  "version": "0.5.3",
+  "version": "0.7.0",
   "type": "module",
-  "description": "Worker dựng video (studio.tts, studio.render_preview, studio.render_final) cho máy cấu hình cao",
+  "description": "Worker dựng video (studio.tts, studio.transcribe, studio.render_preview, studio.render_final, studio.export_premiere) cho máy cấu hình cao",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

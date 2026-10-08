@@ -1,7 +1,12 @@
-# Engine Python TTS (OmniVoice)
+# Engine Python: TTS (OmniVoice) và nhận dạng lời nói (WhisperX)
 
-> **Nguồn:** Chép từ `ag-studio/engines/python/` (tts.py, engine_io.py, requirements.txt).
-> Script `tts.py` và `engine_io.py` được dùng bởi ag-render-worker để tổng hợp giọng nói.
+> **Nguồn:** Chép từ `ag-studio/engines/python/` (tts.py, transcribe.py, engine_io.py, requirements.txt), không sửa.
+> `tts.py` chạy job `studio.tts`, `transcribe.py` chạy job `studio.transcribe`.
+>
+> ```
+> python engines/python/transcribe.py --job <job.json> --result <result.json> [--dry-run]
+> ```
+> Job: `{ device, model, compute_type, batch_size, items: [{ source_id, audio_path, language|null }] }`.
 
 Đây là engine TTS độc lập được ag-render-worker gọi như tiến trình con:
 

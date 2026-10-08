@@ -1,7 +1,7 @@
 /**
- * Injectable Python engine runner dùng cho handler TTS và cho tests.
+ * Injectable Python engine runner dùng cho handler TTS, transcribe và cho tests.
  * Contract giống PythonMediaEngine của @harness/adapters/media-python:
- * ghi job JSON ra file tạm, spawn python tts.py, đọc result JSON.
+ * ghi job JSON ra file tạm, spawn python <script>.py, đọc result JSON.
  */
 import { spawn } from 'node:child_process';
 import { delimiter, dirname } from 'node:path';
@@ -34,6 +34,12 @@ export interface TtsEngineJob {
   language: string;
   ref_audio: string;
   ref_text: string;
+  /** OmniVoice voice design when there is no `ref_audio` (e.g. "female, young adult"). */
+  instruct?: string | null;
+  /** WhisperX model that hears a sample's words once when `ref_text` is empty; null: read without them. */
+  ref_asr_model?: string | null;
+  /** Its faster-whisper compute type (the transcribe stage's: `extra.transcribe_compute_type`, else by device). */
+  ref_asr_compute_type?: string | null;
   align: boolean;
   lines: Array<{
     line_id: string;
@@ -50,9 +56,18 @@ export interface PythonRunnerOptions {
   dryRun?: boolean;
 }
 
-type PythonRunResult =
-  | { kind: 'ok'; result: TtsEngineResult }
+export type EngineRunResult<R> =
+  | { kind: 'ok'; result: R }
   | { kind: 'contract' | 'transient'; reason: string };
+
+type PythonRunResult = EngineRunResult<TtsEngineResult>;
+
+/** Chạy một script engine bất kỳ; `result` là object JSON `ok: true` nguyên văn. */
+export type EngineRunner = (
+  job: object,
+  outDir: string,
+  signal?: AbortSignal,
+) => Promise<EngineRunResult<Record<string, unknown>>>;
 
 export type PythonRunner = (
   job: TtsEngineJob,
@@ -77,7 +92,24 @@ function pythonEnv(): NodeJS.ProcessEnv {
  * Tạo runner thật: spawn python tts.py với job/result JSON files.
  */
 export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
+  const run = createEngineRunner({ ...opts, script: 'tts.py' });
   return async (job: TtsEngineJob, outDir: string, signal?: AbortSignal): Promise<PythonRunResult> => {
+    const r = await run(job, outDir, signal);
+    if (r.kind !== 'ok') return r;
+    const lines = r.result['lines'];
+    if (!Array.isArray(lines)) {
+      return { kind: 'transient', reason: 'python result.lines is not an array' };
+    }
+    return { kind: 'ok', result: { lines: lines as TtsResultLine[] } };
+  };
+}
+
+/**
+ * Runner chung: spawn `python <enginesDir>/<script> --job … --result …`, đọc file result. Exit code khác 0, timeout,
+ * huỷ, file result thiếu/hỏng đều là `transient`; `{ ok: false, kind: "contract" }` là `contract`.
+ */
+export function createEngineRunner(opts: PythonRunnerOptions & { script: string }): EngineRunner {
+  return async (job: object, outDir: string, signal?: AbortSignal): Promise<EngineRunResult<Record<string, unknown>>> => {
     if (signal?.aborted) return { kind: 'transient', reason: 'aborted before start' };
     const id = randomUUID();
     const jobPath = join(outDir, `engine-job-${id}.json`);
@@ -85,7 +117,7 @@ export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
     mkdirSync(outDir, { recursive: true });
     writeFileSync(jobPath, JSON.stringify(job), 'utf8');
 
-    const scriptPath = join(opts.enginesDir, 'tts.py');
+    const scriptPath = join(opts.enginesDir, opts.script);
     const args = ['--job', jobPath, '--result', resultPath];
     if (opts.dryRun) args.push('--dry-run');
 
@@ -168,11 +200,6 @@ export function createPythonRunner(opts: PythonRunnerOptions): PythonRunner {
       return { kind: 'transient', reason: "python result missing 'ok' flag" };
     }
 
-    const lines = obj['lines'];
-    if (!Array.isArray(lines)) {
-      return { kind: 'transient', reason: 'python result.lines is not an array' };
-    }
-
-    return { kind: 'ok', result: { lines: lines as TtsResultLine[] } };
+    return { kind: 'ok', result: obj };
   };
 }

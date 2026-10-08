@@ -187,6 +187,18 @@ describe('studio.tts handler', () => {
     }
   });
 
+  test('a voice designed from an instruct reaches the engine, with no sample to download', async () => {
+    let seen: { ref_audio: string; instruct?: string | null } | null = null;
+    const fakeRunner: PythonRunner = async (job) => {
+      seen = { ref_audio: job.ref_audio, instruct: job.instruct ?? null };
+      for (const line of job.lines) writeFileSync(line.out_path, Buffer.alloc(100));
+      return { kind: 'ok', result: { lines: job.lines.map((l) => ({ line_id: l.line_id, wav_path: l.out_path, duration_seconds: 0.5, chunks: [{ text: l.chunks[0] ?? '', start: 0, end: 0.5 }], words: null, alignment: 'chunk' as const })) } };
+    };
+    (ctx.payload as { voice: Record<string, unknown> }).voice = { reference: null, reference_text: null, speed: 1, instruct: 'female, young adult' };
+    await makeStudioTtsHandler({ runner: fakeRunner })(ctx);
+    expect(seen).toEqual({ ref_audio: '', instruct: 'female, young adult' });
+  });
+
   test('runner returns contract error → NonRetryableError', async () => {
     const fakeRunner: PythonRunner = async () => ({
       kind: 'contract',
@@ -238,6 +250,8 @@ describe('studio.tts handler', () => {
         dryRun: true,
       });
 
+      // tts.py wants a voice: a sample to clone, or a description to design one from
+      (ctx.payload as { voice: Record<string, unknown> }).voice = { reference: null, reference_text: null, speed: 1, instruct: 'female, young adult' };
       const handler = makeStudioTtsHandler({ runner, enginesDir });
       const result = await handler(ctx);
 
