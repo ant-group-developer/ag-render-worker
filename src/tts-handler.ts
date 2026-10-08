@@ -129,6 +129,11 @@ export function makeStudioTtsHandler(
       language: payload.language,
       ref_audio: refAudioLocalPath || '',
       ref_text: payload.voice.reference_text ?? '',
+      // no sample: the voice is designed from this description (OmniVoice `instruct`)
+      instruct: payload.voice.instruct ?? null,
+      // a sample whose words nobody typed: heard once with the model studio.transcribe uses (`tts_ref_asr_model`, '' = off)
+      ref_asr_model: typeof extra.tts_ref_asr_model === 'string' ? extra.tts_ref_asr_model || null : 'large-v3',
+      ref_asr_compute_type: extra.transcribe_compute_type ?? null,
       align: payload.align_words,
       lines: engineLines,
     };
