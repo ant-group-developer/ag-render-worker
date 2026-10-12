@@ -1,4 +1,6 @@
-# Cấu hình ag-render-worker. Sao chép thành config.yaml (cạnh package.json) rồi sửa.
+# Cấu hình ag-render-worker cài tay (máy dev, Linux). Máy Windows cài bằng install.ps1 của farm: installer tự viết
+# file này và mỗi lần cập nhật viết lại các khoá extra nó quản lý (python_bin, ytdlp_bin, hf_home, encoder, ollama_url,
+# unload_ollama_before_tts), giữ các khoá khác.
 # Đường dẫn Windows viết trong nháy đơn để khỏi phải escape dấu \.
 
 # URL của ag-farm hub (API, không phải web quản lý)
@@ -7,15 +9,14 @@ hub_url: https://farm-api.example.com
 token: 'DAN_TOKEN_NODE_VAO_DAY'
 # Tên hiển thị trên trang Máy
 name: gpu-01-render
-kinds:
-  - studio.tts
-  - studio.transcribe
-  - studio.render_preview
-  - studio.render_final
-  - studio.export_premiere
-work_dir: 'D:\ag-farm\render\work'
+# Không khai kinds: worker nhận mọi loại job nó có handler và máy chạy được (studio.tts, studio.transcribe cần GPU
+# NVIDIA + python_bin import được torch). Khai thì là danh sách ép:
+# kinds:
+#   - studio.render_preview
+#   - studio.render_final
+work_dir: 'C:\ag-farm\render\work'
 cache:
-  dir: 'D:\ag-farm\render\cache'
+  dir: 'C:\ag-farm\cache\render'
   max_gb: 100
 # Mặc định C:\ProgramData\ag-farm\machine.yaml (dùng chung với ag-scan-worker trên cùng máy)
 # machine_file: 'C:\ProgramData\ag-farm\machine.yaml'
@@ -25,9 +26,13 @@ cache:
 #   - { days: [1, 2, 3, 4, 5], from: '19:00', to: '07:00' }
 
 extra:
-  # Python trong venv có torch + OmniVoice + WhisperX (deploy/setup-python.ps1). Máy chỉ nhận studio.tts và
+  # Python trong venv có torch + OmniVoice + WhisperX (deploy/setup-render.ps1). Máy chỉ nhận studio.tts và
   # studio.transcribe khi chính file này import được torch.
-  python_bin: 'D:\ag-farm\venv\Scripts\python.exe'
+  python_bin: 'C:\ag-farm\venv\Scripts\python.exe'
+  # yt-dlp (mặc định: yt-dlp.exe cạnh python_bin, không có thì trên PATH)
+  ytdlp_bin: 'C:\ag-farm\venv\Scripts\yt-dlp.exe'
+  # Thư mục model Hugging Face (HF_HOME của engine Python)
+  hf_home: 'C:\ag-farm\models'
   # Nhận dạng lời nói (studio.transcribe): thiết bị, compute_type, batch_size. GPU 4 GB thì int8_float16 + 4.
   # transcribe_device: auto
   # transcribe_compute_type: float16

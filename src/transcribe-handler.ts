@@ -101,6 +101,7 @@ export function makeStudioTranscribeHandler(
       overrides.runner ??
       (createEngineRunner({
         pythonBin: extra.python_bin ?? 'python',
+        hfHome: extra.hf_home,
         enginesDir: overrides.enginesDir ?? join(__dirname, '..', 'engines', 'python'),
         script: 'transcribe.py',
         timeoutMs: (extra.python_timeout_s ?? 600) * 1000,

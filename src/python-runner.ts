@@ -51,6 +51,8 @@ export interface TtsEngineJob {
 
 export interface PythonRunnerOptions {
   pythonBin: string;
+  /** `HF_HOME` của tiến trình Python (nơi model Hugging Face nằm; `extra.hf_home`). Không có: giữ env của worker. */
+  hfHome?: string;
   enginesDir: string;
   timeoutMs: number;
   dryRun?: boolean;
@@ -78,14 +80,18 @@ export type PythonRunner = (
 
 /**
  * Env của tiến trình Python: thêm thư mục ffmpeg của worker (ffmpeg-static, cài qua npm) vào đầu PATH, vì
- * các thư viện audio của engine gọi `ffmpeg` theo PATH và máy worker thường không cài ffmpeg riêng.
+ * các thư viện audio của engine gọi `ffmpeg` theo PATH và máy worker thường không cài ffmpeg riêng; đặt `HF_HOME`
+ * (worker chạy dưới SYSTEM: model tải trước nằm ở thư mục cài, không ở cache của một tài khoản).
  */
-function pythonEnv(): NodeJS.ProcessEnv {
+export function pythonEnv(hfHome?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (hfHome) env['HF_HOME'] = hfHome;
   const ffmpeg = resolveFfmpeg();
   // a bare command name ("ffmpeg") is already found on PATH
-  if (!/[\\/]/.test(ffmpeg)) return process.env;
-  const key = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
-  return { ...process.env, [key]: `${dirname(ffmpeg)}${delimiter}${process.env[key] ?? ''}` };
+  if (!/[\\/]/.test(ffmpeg)) return env;
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  env[key] = `${dirname(ffmpeg)}${delimiter}${env[key] ?? ''}`;
+  return env;
 }
 
 /**
@@ -128,7 +134,7 @@ export function createEngineRunner(opts: PythonRunnerOptions & { script: string 
         let settled = false;
         const child = spawn(opts.pythonBin, [scriptPath, ...args], {
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: pythonEnv(),
+          env: pythonEnv(opts.hfHome),
         });
         let timedOut = false;
         const timer = setTimeout(() => {

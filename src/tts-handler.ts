@@ -146,6 +146,7 @@ export function makeStudioTtsHandler(
       overrides.runner ??
       createPythonRunner({
         pythonBin,
+        hfHome: extra.hf_home,
         enginesDir,
         timeoutMs: pythonTimeoutMs,
       });

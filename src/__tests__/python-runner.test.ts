@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createPythonRunner } from '../python-runner.js';
+import { createEngineRunner, createPythonRunner, pythonEnv } from '../python-runner.js';
 
 function engineDirWith(script: string): string {
   const dir = join(tmpdir(), `py-runner-${randomUUID()}`);
@@ -27,6 +27,17 @@ describe('createPythonRunner', () => {
     const result = await run(JOB, join(enginesDir, 'out'), ctrl.signal);
     expect(result).toEqual({ kind: 'transient', reason: 'aborted' });
     expect(Date.now() - started).toBeLessThan(10_000);
+  }, 20_000);
+
+  it('gives the engine HF_HOME, where the installer put the models', async () => {
+    const enginesDir = engineDirWith(
+      'const a = process.argv; require("fs").writeFileSync(a[a.indexOf("--result") + 1], ' +
+        'JSON.stringify({ ok: true, hf_home: process.env.HF_HOME ?? null }));',
+    );
+    const run = createEngineRunner({ pythonBin: process.execPath, enginesDir, script: 'tts.py', timeoutMs: 30_000, hfHome: 'C:\\ag-farm\\models' });
+    const result = await run({}, join(enginesDir, 'out'));
+    expect(result).toEqual({ kind: 'ok', result: { ok: true, hf_home: 'C:\\ag-farm\\models' } });
+    expect(pythonEnv()['HF_HOME']).toBe(process.env['HF_HOME']);
   }, 20_000);
 
   it('does not start the engine for an already aborted job', async () => {
