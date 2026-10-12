@@ -6,7 +6,7 @@ import { runWorker, loadConfig } from '@ag-farm/worker-sdk';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { capabilitiesOptionsFor, getExtra } from './config.js';
+import { RELEASE_PACKAGE, capabilitiesOptionsFor, getExtra } from './config.js';
 import { makeStudioTtsHandler } from './tts-handler.js';
 import { makeStudioRenderPreviewHandler, makeStudioRenderFinalHandler } from './render-handler.js';
 import { makeStudioExportPremiereHandler } from './premiere-handler.js';
@@ -58,6 +58,8 @@ async function main(): Promise<void> {
     version,
     // studio.tts and studio.transcribe need python: true, i.e. extra.python_bin imports torch
     capabilitiesOptions: capabilitiesOptionsFor(extra),
+    // Máy cài bằng install.ps1 (config có updater_task): tự lên bản mới khi hub phát hành.
+    selfUpdate: { package: RELEASE_PACKAGE },
     handlers: {
       'studio.tts': ttHandler,
       'studio.render_preview': previewHandler,

@@ -6,6 +6,12 @@ import { dirname, join } from 'node:path';
 import type { CapabilitiesOptions } from '@ag-farm/worker-sdk';
 import { resolveFfmpeg } from './ffmpeg-utils.js';
 
+/**
+ * Tên gói của worker này trong `/dist/latest.json` của hub (scripts/release.mjs phát hành dưới tên này). Worker tự cập
+ * nhật theo nó (worker-sdk `selfUpdate`), installer cài vai trò `render` từ gói cùng tên.
+ */
+export const RELEASE_PACKAGE = 'ag-render-worker';
+
 export interface RenderWorkerExtra {
   /** Đường dẫn Python executable. Mặc định: 'python'. */
   python_bin?: string;

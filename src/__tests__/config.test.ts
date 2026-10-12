@@ -1,10 +1,15 @@
 import { join } from 'node:path';
-import { capabilitiesOptionsFor, getExtra, resolveYtdlp } from '../config.js';
+import { ROLE_PACKAGES } from '@ag-farm/protocol';
+import { RELEASE_PACKAGE, capabilitiesOptionsFor, getExtra, resolveYtdlp } from '../config.js';
 import { resolveFfmpeg } from '../ffmpeg-utils.js';
 
 const nothingExists = () => false;
 
 describe('render worker config', () => {
+  test('updates itself as the package the installer and the hub know for the render role', () => {
+    expect(RELEASE_PACKAGE).toBe(ROLE_PACKAGES.render);
+  });
+
   test('reads the transcribe settings', () => {
     expect(
       getExtra({ transcribe_device: 'cuda', transcribe_compute_type: 'int8_float16', transcribe_batch_size: 4 }),
