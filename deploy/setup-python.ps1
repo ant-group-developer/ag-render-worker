@@ -1,21 +1,11 @@
-﻿# Cài môi trường Python cho TTS (OmniVoice) trên máy GPU. Chạy một lần, đứng ở thư mục đã giải nén:
-#   powershell -ExecutionPolicy Bypass -File deploy\setup-python.ps1 [-Venv D:\ag-farm\venv] [-Python py]
-# Sau đó đặt extra.python_bin trong config.yaml = <Venv>\Scripts\python.exe
+﻿# Cũ, giữ cho lệnh đã ghi ở đâu đó: nay mọi thứ nằm trong setup-render.ps1 (Python 3.11 tự cài, venv, torch CUDA,
+# OmniVoice, WhisperX, yt-dlp, model). install.ps1 của farm tự chạy setup-render.ps1 lúc cài và lúc cập nhật.
+#   powershell -ExecutionPolicy Bypass -File deploy\setup-python.ps1 [-Venv C:\ag-farm\venv]
+# venv luôn là <thư mục cha của -Venv>\venv; extra.python_bin = <đó>\Scripts\python.exe.
 param(
-  [string]$Venv = "D:\ag-farm\venv",
-  [string]$Python = "py"
+  [string]$Venv = 'C:\ag-farm\venv',
+  # Bỏ qua (setup-render.ps1 tự tìm hoặc tự cài Python 3.11)
+  [string]$Python = 'py'
 )
-$ErrorActionPreference = "Stop"
-$root = Split-Path -Parent $PSScriptRoot
-
-if (-not (Test-Path "$Venv\Scripts\python.exe")) {
-  & $Python -3.11 -m venv $Venv
-  if ($LASTEXITCODE -ne 0) { throw "Khong tao duoc venv (can Python 3.11: https://www.python.org)" }
-}
-$P = "$Venv\Scripts\python.exe"
-& $P -m pip install --upgrade pip
-# torch bản CUDA 12.6 trước, rồi OmniVoice
-& $P -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
-& $P -m pip install -r "$root\engines\python\requirements.txt"
-& $P -c "import torch, omnivoice; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
-Write-Host "Xong. Dat extra.python_bin: '$P' trong config.yaml" -ForegroundColor Green
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'setup-render.ps1') -InstallDir (Split-Path -Parent $Venv)
+exit $LASTEXITCODE
