@@ -11,6 +11,7 @@ import { makeStudioTtsHandler } from './tts-handler.js';
 import { makeStudioRenderPreviewHandler, makeStudioRenderFinalHandler } from './render-handler.js';
 import { makeStudioExportPremiereHandler } from './premiere-handler.js';
 import { makeStudioTranscribeHandler } from './transcribe-handler.js';
+import { makeStudioReferenceFetchHandler } from './reference-handler.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -52,6 +53,7 @@ async function main(): Promise<void> {
   const finalHandler = makeStudioRenderFinalHandler(extra);
   const exportPremiereHandler = makeStudioExportPremiereHandler(extra);
   const transcribeHandler = makeStudioTranscribeHandler({ extra });
+  const referenceFetchHandler = makeStudioReferenceFetchHandler({ extra });
 
   await runWorker({
     config,
@@ -66,6 +68,8 @@ async function main(): Promise<void> {
       'studio.render_final': finalHandler,
       'studio.export_premiere': exportPremiereHandler,
       'studio.transcribe': transcribeHandler,
+      // only machines with yt-dlp (engines.ytdlp) report this kind
+      'studio.reference_fetch': referenceFetchHandler,
     },
   });
 }
