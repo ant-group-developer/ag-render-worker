@@ -5,7 +5,7 @@
  *   release/ag-render-worker-<version>/
  *     dist/worker.mjs        mọi JS, gồm cả @ag-farm/* và @ag-studio/render (link: lúc dev)
  *     package.json           chỉ còn ffmpeg-static, ffprobe-static (binary, cài lúc `npm install`)
- *     engines/python/        tts.py cho OmniVoice
+ *     engines/python/        tts.py (OmniVoice), transcribe.py (WhisperX), engine_io.py, requirements.txt
  *     deploy/*               mẫu config.yaml, machine.yaml, script cài dịch vụ Windows, cài Python
  *   release/ag-render-worker-<version>.zip
  *
@@ -57,11 +57,15 @@ writeFileSync(
   ) + '\n',
 );
 
-// Engine TTS (không lấy __pycache__)
-mkdirSync(join(out, 'engines', 'python'), { recursive: true });
-for (const f of ['tts.py', 'engine_io.py', 'requirements.txt', 'README.md']) {
-  const src = join(root, 'engines', 'python', f);
-  if (existsSync(src)) cpSync(src, join(out, 'engines', 'python', f));
+// Engine Python: chép cả thư mục (không lấy __pycache__, *.pyc), để engine mới không bị bỏ sót như
+// transcribe.py ở 0.6.0–0.8.0 (danh sách file cố định chỉ có tts.py).
+cpSync(join(root, 'engines', 'python'), join(out, 'engines', 'python'), {
+  recursive: true,
+  filter: (src) => !/(^|[\\/])__pycache__([\\/]|$)|\.pyc$/.test(src),
+});
+// Script mà handler gọi (python-runner.ts, transcribe-handler.ts): thiếu là máy worker báo lỗi Errno 2.
+for (const f of ['tts.py', 'transcribe.py', 'engine_io.py', 'requirements.txt']) {
+  if (!existsSync(join(out, 'engines', 'python', f))) throw new Error(`release: thieu engines/python/${f}`);
 }
 cpSync(join(root, 'deploy'), join(out, 'deploy'), { recursive: true });
 
