@@ -388,6 +388,8 @@ async function handleStudioRender(
     fontsDir,
     outDir,
     encoderCfg: extra.encoder ?? 'auto',
+    // a preview is watched in a browser: same frame size, a much lighter encode (the mezzanines and their cache are shared)
+    tier: isPreview ? 'preview' : 'final',
     timeoutSeconds: ffmpegTimeoutMs / 1000,
     sourceChecksums,
     signal: ctx.signal,
