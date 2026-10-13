@@ -6,10 +6,14 @@
  *     dist/worker.mjs        mọi JS, gồm cả @ag-farm/* và @ag-studio/render (link: lúc dev)
  *     package.json           chỉ còn ffmpeg-static, ffprobe-static (binary, cài lúc `npm install`)
  *     engines/python/        tts.py (OmniVoice), transcribe.py (WhisperX), engine_io.py, requirements.txt
- *     deploy/*               mẫu config.yaml, machine.yaml, script cài dịch vụ Windows, cài Python
+ *     deploy/*               setup-render.ps1 (install.ps1 chạy: Python, venv, torch, yt-dlp, model), mẫu config
  *   release/ag-render-worker-<version>.zip
  *
  * Chạy trên máy dev đã build được repo (ag-farm, ag-studio nằm cạnh): node scripts/release.mjs
+ * Phát hành lên farm (máy worker tự cập nhật): khoá phát hành của hub trong biến môi trường FARM_RELEASE_KEY (không
+ * truyền khoá trên dòng lệnh), rồi
+ *   node scripts/release.mjs --publish --upload https://api-farm.ant-group.net [--key-env TÊN_BIẾN]
+ * Hub từ chối bản không mới hơn bản đang phát hành: tăng `version` trong package.json trước.
  */
 import { build } from 'esbuild';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -64,20 +68,22 @@ cpSync(join(root, 'engines', 'python'), join(out, 'engines', 'python'), {
   filter: (src) => !/(^|[\\/])__pycache__([\\/]|$)|\.pyc$/.test(src),
 });
 // Script mà handler gọi (python-runner.ts, transcribe-handler.ts): thiếu là máy worker báo lỗi Errno 2.
-for (const f of ['tts.py', 'transcribe.py', 'engine_io.py', 'requirements.txt']) {
+for (const f of ['tts.py', 'transcribe.py', 'engine_io.py', 'requirements.txt', 'setup_check.py']) {
   if (!existsSync(join(out, 'engines', 'python', f))) throw new Error(`release: thieu engines/python/${f}`);
 }
 cpSync(join(root, 'deploy'), join(out, 'deploy'), { recursive: true });
+// install.ps1 của farm chạy file này lúc cài và lúc cập nhật (Python, venv, torch, yt-dlp, model)
+if (!existsSync(join(out, 'deploy', 'setup-render.ps1'))) throw new Error('release: thieu deploy/setup-render.ps1');
 
-// node_modules, runtime/node.exe, run.cmd, zip và (với --publish <dir>) phát hành lên farm: phần chung
-// với worker kia, nằm ở ag-farm/tools/worker-installer.
+// node_modules, runtime/node.exe, run.cmd, zip và phát hành lên farm (--publish --upload <hub>, hoặc --publish <dir>):
+// phần chung với worker kia, nằm ở ag-farm/tools/worker-installer.
 const installer = join(root, '..', 'ag-farm', 'tools', 'worker-installer', 'package-release.mjs');
-const { finishRelease, publishDirFromArgv } = await import(pathToFileURL(installer).href);
-finishRelease({
+const { finishRelease, publishOptionsFromArgv } = await import(pathToFileURL(installer).href);
+await finishRelease({
   repoRoot: root,
   releaseRoot: join(root, 'release'),
   name,
-  packageName: 'ag-render-worker',
+  packageName: 'ag-render-worker', // = RELEASE_PACKAGE (src/config.ts): tên worker tự cập nhật theo
   version: pkg.version,
-  publishDir: publishDirFromArgv(),
+  ...publishOptionsFromArgv(),
 });

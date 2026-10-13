@@ -1,11 +1,27 @@
 /**
  * Cấu hình tuỳ riêng của ag-render-worker (nằm trong trường `extra` của WorkerConfig).
  */
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { CapabilitiesOptions } from '@ag-farm/worker-sdk';
+import { resolveFfmpeg } from './ffmpeg-utils.js';
+
+/**
+ * Tên gói của worker này trong `/dist/latest.json` của hub (scripts/release.mjs phát hành dưới tên này). Worker tự cập
+ * nhật theo nó (worker-sdk `selfUpdate`), installer cài vai trò `render` từ gói cùng tên.
+ */
+export const RELEASE_PACKAGE = 'ag-render-worker';
 
 export interface RenderWorkerExtra {
   /** Đường dẫn Python executable. Mặc định: 'python'. */
   python_bin?: string;
+  /**
+   * yt-dlp (installer: `<InstallDir>\venv\Scripts\yt-dlp.exe`). Không có thì `yt-dlp` cạnh `python_bin` (cùng venv), không
+   * có nữa thì `yt-dlp` trên PATH. Máy chạy được nó thì khai `engines.ytdlp`.
+   */
+  ytdlp_bin?: string;
+  /** Thư mục model Hugging Face cho engine Python (`HF_HOME`; installer: `<InstallDir>\models`). Mặc định: của tài khoản chạy. */
+  hf_home?: string;
   /** Timeout (giây) cho tiến trình Python TTS. Mặc định: 600. */
   python_timeout_s?: number;
   /** Giải phóng model Ollama trước khi chạy TTS (hữu ích khi cùng máy với scan worker). */
@@ -41,6 +57,8 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
   if (!extra) return {};
   return {
     python_bin: typeof extra['python_bin'] === 'string' ? extra['python_bin'] : undefined,
+    ytdlp_bin: typeof extra['ytdlp_bin'] === 'string' && extra['ytdlp_bin'] ? extra['ytdlp_bin'] : undefined,
+    hf_home: typeof extra['hf_home'] === 'string' && extra['hf_home'] ? extra['hf_home'] : undefined,
     python_timeout_s:
       typeof extra['python_timeout_s'] === 'number' ? extra['python_timeout_s'] : undefined,
     unload_ollama_before_tts:
@@ -72,10 +90,29 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
   };
 }
 
+/** yt-dlp worker chạy: `extra.ytdlp_bin`, không có thì bản trong venv của `python_bin`, không có nữa thì PATH. */
+export function resolveYtdlp(extra: RenderWorkerExtra, exists: (p: string) => boolean = existsSync): string {
+  if (extra.ytdlp_bin) return extra.ytdlp_bin;
+  if (extra.python_bin && /[\\/]/.test(extra.python_bin)) {
+    const besidePython = join(dirname(extra.python_bin), process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+    if (exists(besidePython)) return besidePython;
+  }
+  return 'yt-dlp';
+}
+
 /**
- * Phép dò năng lực của máy: luôn dò Python+torch, bằng đúng interpreter mà engine TTS/transcribe sẽ chạy. Không dò thì
- * máy khai `python: null` và hub không bao giờ giao `studio.tts`/`studio.transcribe` (cả hai cần `python: true`).
+ * Phép dò năng lực của máy, bằng đúng các binary handler sẽ chạy: Python+torch của engine TTS/transcribe (không dò thì
+ * máy khai `python: null` và hub không bao giờ giao `studio.tts`/`studio.transcribe`), ffmpeg kèm trong gói (máy worker
+ * thường không có ffmpeg trên PATH: dò PATH thì máy khai `ffmpeg: null`, NVENC false) và yt-dlp.
  */
-export function capabilitiesOptionsFor(extra: RenderWorkerExtra): CapabilitiesOptions {
-  return { detectPythonTorch: true, pythonBin: extra.python_bin };
+export function capabilitiesOptionsFor(
+  extra: RenderWorkerExtra,
+  exists: (p: string) => boolean = existsSync,
+): CapabilitiesOptions {
+  return {
+    detectPythonTorch: true,
+    pythonBin: extra.python_bin,
+    ffmpegPath: resolveFfmpeg(),
+    ytdlpBin: resolveYtdlp(extra, exists),
+  };
 }
