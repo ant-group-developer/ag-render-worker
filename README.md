@@ -2,127 +2,149 @@
 
 Worker dựng video cho AG Studio, chạy trên máy cấu hình cao.
 
-Nhận job từ [ag-farm](../ag-farm) và xử lý năm loại việc:
+Nhận job từ [ag-farm](../ag-farm) và xử lý sáu loại việc:
 - `studio.tts` — tổng hợp giọng nói (OmniVoice TTS)
 - `studio.transcribe` — nhận dạng lời nói trong footage (WhisperX), cho kiểu dựng cắt theo shot
 - `studio.export_premiere` — xuất project Adobe Premiere
 - `studio.render_preview` — dựng preview 720p
 - `studio.render_final` — dựng bản gốc chất lượng cao
+- `studio.reference_fetch` — tải video YouTube mẫu (≤ 480p, ≤ 30 phút, ≤ 300 MB) cho Studio đo kiểu dựng khi YouTube
+  chặn máy chủ Studio; yt-dlp chạy đúng cờ của Studio (không cookie, không đăng nhập), file đẩy lên rồi xoá ngay trên
+  máy. Chỉ máy có yt-dlp nhận loại này.
 
 ---
 
-## Yêu cầu hệ thống
+## Cài trên máy worker (Windows)
 
-| Thành phần | Phiên bản tối thiểu | Ghi chú |
-|---|---|---|
-| Node.js | 22 (khuyến nghị 24) | Dùng `corepack enable` để bật pnpm |
-| ffmpeg | 6+ | Cần có trong PATH hoặc đặt `FFMPEG_PATH` |
-| Python | 3.11+ | Cần cho `studio.tts` và `studio.transcribe`; máy chỉ nhận hai loại này khi `extra.python_bin` import được torch |
-| torch + CUDA | torch 2.8.0+cu126 | Cần GPU NVIDIA ≥ RTX 3060 12GB cho TTS thật |
-| OmniVoice | ≥ 0.2.1, < 0.3 | TTS model |
-| WhisperX | ≥ 3.7.4, < 4 | Nhận dạng lời nói (`studio.transcribe`) và căn mốc từ của TTS |
-| Font | Noto Sans (vi) hoặc font của team | Dùng trong render composition |
+Không cài tay. Trang **Máy** của web farm → **Thêm máy** cho một lệnh; dán vào PowerShell mở bằng
+"Run as Administrator":
 
-Máy không có GPU: worker chạy bình thường nhưng TTS sẽ rất chậm (CPU inference).
-Để bỏ qua TTS thật, dùng `--dry-run` ở môi trường CI.
+```powershell
+iwr https://<farm>/dist/install.ps1 -UseBasicParsing | iex; Install-AgWorker -Hub https://<farm> -Code <mã>
+```
+
+Cập nhật lên bản mới: cùng lệnh, bỏ `-Code`. Cài và cập nhật đều chạy `deploy\setup-render.ps1` của gói (chạy lại bao
+nhiêu lần cũng được):
+
+- Python 3.11 (thiếu thì tự cài cho mọi user: winget, không có thì bộ cài python.org), venv `C:\ag-farm\venv`;
+- `yt-dlp` trong venv, mỗi lần cập nhật nâng lên bản mới nhất;
+- máy có GPU NVIDIA: torch 2.8.0 CUDA 12.6 + `engines/python/requirements.txt` (OmniVoice, WhisperX), kiểm
+  `import torch, omnivoice, whisperx` và CUDA, tải trước model OmniVoice và Whisper `large-v3` vào `C:\ag-farm\models`
+  (`HF_HOME` của worker). requirements và bản torch không đổi thì bỏ qua pip (dấu `venv\ag-setup.stamp`);
+- log ở `C:\ag-farm\logs\setup.log`, kết quả ở `C:\ag-farm\logs\setup-result.json`.
+
+Máy không có GPU NVIDIA vẫn dựng video (`studio.render_*`, `studio.export_premiere`), không nhận `studio.tts` và
+`studio.transcribe`.
+
+Sau mỗi lần cài/cập nhật, `C:\ag-farm\render\config.yaml` được ghi lại: giữ `name`, `token`, `hub_url`, `cache`,
+`schedule` và mọi khoá anh tự thêm (kể cả trong `extra`); viết lại các khoá installer quản lý trong `extra`
+(`python_bin`, `ytdlp_bin`, `hf_home`, `encoder`, `ollama_url`, `unload_ollama_before_tts`); bỏ danh sách `kinds`. Bản
+trước lưu ở `config.yaml.bak`.
+
+### Tự cập nhật
+
+Từ 0.9.0, máy tự lên bản mới khi farm phát hành: mỗi 15 phút worker xem `/dist/latest.json` của hub, có bản mới hơn
+(và trang **Máy** đang bật "Tự cập nhật" cho máy này, hoặc admin bấm "Cập nhật ngay") thì ngừng nhận việc, chờ việc
+đang chạy xong (tối đa 30 phút), rồi chạy task `ag-farm-updater`. Task cài bản mới như lệnh cập nhật, kể cả
+`setup-render.ps1` (giữ bản cũ ở `C:\ag-farm\render\app.prev`); bản mới không kết nối hub trong 3 phút thì quay về bản
+cũ. Kết quả, lỗi và dòng cuối `setup.log` hiện ở trang **Máy**; log ở `C:\ag-farm\updater\updater.log`. Đổi chu kỳ/thời
+gian chờ: `update_check_minutes`, `update_drain_minutes` trong `config.yaml` (installer giữ giá trị anh đặt).
+
+Máy đang chạy 0.8.1 trở về trước chưa có bộ cập nhật: chạy lệnh cập nhật ở trên (bỏ `-Code`) **một lần cuối** bằng tay.
+
+### Tình trạng máy
+
+Từ 0.9.0, worker đo máy mỗi 15 giây (CPU, RAM, ổ chứa `work_dir`/cache, mạng vào/ra, GPU qua `nvidia-smi`) và gửi kèm
+heartbeat; trang **Máy** của farm hiện các số này và biểu đồ 1 giờ / 24 giờ / 7 ngày. Không cần cài thêm gì; tắt bằng
+`metrics: false` trong `config.yaml`. Hub farm phải lên bản có số đo trước (hub cũ từ chối thì worker tự thôi gửi số đo
+trong một giờ, vẫn nhận việc bình thường).
+
+### Phát hành bản mới (máy build Windows)
+
+Tăng `version` trong `package.json` (hub từ chối bản không mới hơn bản đang phát hành), build `@ag-studio/render`, rồi:
+
+```powershell
+$env:FARM_RELEASE_KEY = '<FARM_RELEASE_KEY của hub>'   # chỉ trong phiên này, không ghi vào file
+node scripts/release.mjs --publish --upload https://api-farm.ant-group.net
+```
+
+Script đóng gói rồi đẩy zip lên hub (`POST /v1/admin/releases`); hub kiểm sha256, lưu gói và `latest.json`, các máy tự
+cập nhật trong khoảng 15 phút. Hub khác dùng biến khác: `--key-env FARM_DEV_RELEASE_KEY`. Không còn chép tay lên VPS
+bằng scp; `--publish <thư mục>` vẫn chép vào một thư mục latest.json nếu cần.
+
+### Loại job máy nhận
+
+Không khai `kinds`: worker báo mọi loại job nó có handler **và** máy đủ điều kiện theo `JOB_TYPE_SPECS` (GPU, Python
+import được torch, NVENC, yt-dlp), dò lúc worker khởi động (tức là sau mỗi lần cài/cập nhật). Không muốn máy nhận một
+loại: tắt công tắc của loại đó ở trang **Máy**. `kinds` trong config vẫn dùng được để ép danh sách (giao với handler).
+
+### Thư mục
+
+| Đường dẫn | Nội dung |
+|---|---|
+| `C:\ag-farm\render\app` | gói worker (Node riêng, ffmpeg kèm theo, engine Python) |
+| `C:\ag-farm\render\config.yaml` | cấu hình (token chỉ nằm ở đây) |
+| `C:\ag-farm\render\logs\worker.log` | log worker |
+| `C:\ag-farm\venv` | Python của TTS / nhận dạng lời nói / yt-dlp |
+| `C:\ag-farm\models` | model Hugging Face (OmniVoice, Whisper) |
+| `C:\ProgramData\ag-farm\machine.yaml` | slot dùng chung với ag-scan-worker |
+
+Worker chạy bằng task hệ thống `ag-farm-render` (tài khoản SYSTEM, tự chạy khi bật máy, chết thì chạy lại).
+`deploy/install-windows.ps1` (dịch vụ NSSM) là cách cài cũ, không dùng nữa; installer tự gỡ dịch vụ NSSM cũ.
 
 ---
 
-## Cài đặt
+## Phát triển (máy dev)
 
-### 1. Clone và cài Node deps
+| Thành phần | Phiên bản |
+|---|---|
+| Node.js | 22+ |
+| Python | 3.11, chỉ cần khi chạy engine thật (`studio.tts`, `studio.transcribe`) |
+| GPU | NVIDIA ≥ RTX 3060 12 GB cho TTS thật; không có thì dùng `--dry-run` ở CI |
+
+ffmpeg/ffprobe lấy từ `ffmpeg-static`/`ffprobe-static` (hoặc `FFMPEG_PATH`/`FFPROBE_PATH`), không cần trên PATH.
 
 ```sh
 git clone https://github.com/your-org/ag-render-worker
 cd ag-render-worker
-corepack enable
-pnpm install   # hoặc yarn install
+yarn install
+# @ag-studio/render (link local) phải build trước
+(cd ../ag-studio && corepack pnpm --filter @ag-studio/render... build)
 ```
 
-### 2. Build @ag-studio/render
-
-Worker phụ thuộc vào `@ag-studio/render` (link local). Cần build trước:
-
-```sh
-cd ../ag-studio
-corepack pnpm --filter @ag-studio/render... build
-cd ../ag-render-worker
-```
-
-### 3. Cài Python venv (máy GPU)
-
-```sh
-# Giữ cache ngoài ổ hệ thống (tuỳ chọn nhưng khuyến nghị)
-export PIP_CACHE_DIR=E:/pip-cache HF_HOME=E:/hf-cache
-
-# Tạo venv
-python3.11 -m venv E:/render-venv
-P=E:/render-venv/Scripts/python
-
-# Cài torch CUDA trước
-$P -m pip install torch==2.8.0 torchaudio==2.8.0 \
-  --index-url https://download.pytorch.org/whl/cu126
-
-# Cài OmniVoice + WhisperX
-$P -m pip install -r engines/python/requirements.txt
-
-# Kiểm tra
-$P -c "import torch, omnivoice; print(torch.__version__, torch.cuda.is_available())"
-```
-
-### 4. Cấu hình
-
-Tạo file `config.yaml`:
-
-```yaml
-# Kết nối ag-farm
-hub_url: https://farm.example.com
-token: <token-node-từ-ag-farm-web>
-name: render-worker-pc1
-
-# Loại job
-kinds:
-  - studio.tts
-  - studio.render_preview
-  - studio.render_final
-
-# Thư mục
-work_dir: E:/ag-render-worker/work
-cache:
-  dir: E:/ag-render-worker/cache
-  max_gb: 100
-
-# Cấu hình riêng của render worker
-extra:
-  python_bin: E:/render-venv/Scripts/python
-  python_timeout_s: 600
-  unload_ollama_before_tts: true   # bật nếu cùng máy với ag-scan-worker
-  ollama_url: http://localhost:11434
-  ffmpeg_timeout_s: 3600
-```
-
----
-
-## Chạy
-
-### Thủ công
-
-```sh
-node dist/main.js --config config.yaml
-```
-
-### Cài dịch vụ Windows (NSSM)
+Venv Python giống máy worker, vào một thư mục tuỳ chọn:
 
 ```powershell
-nssm install ag-render-worker "node" "E:\ag-render-worker\dist\main.js --config E:\ag-render-worker\config.yaml"
-nssm set ag-render-worker AppDirectory "E:\ag-render-worker"
-nssm set ag-render-worker AppEnvironmentExtra "FFMPEG_PATH=E:\tools\ffmpeg\ffmpeg.exe"
-nssm set ag-render-worker AppStdout "E:\ag-render-worker\logs\out.log"
-nssm set ag-render-worker AppStderr "E:\ag-render-worker\logs\err.log"
-nssm start ag-render-worker
+powershell -ExecutionPolicy Bypass -File deploy\setup-render.ps1 -InstallDir E:\ag-dev [-SkipGpu] [-SkipModels]
+# → E:\ag-dev\venv\Scripts\python.exe, E:\ag-dev\venv\Scripts\yt-dlp.exe, E:\ag-dev\models
 ```
 
-### Cài dịch vụ Linux (systemd)
+`config.yaml` cho máy dev (mẫu đủ khoá: `deploy/config.example.yaml`):
+
+```yaml
+hub_url: https://farm.example.com
+token: <token-node-từ-ag-farm-web>
+name: render-dev
+work_dir: 'E:\ag-dev\render\work'
+cache:
+  dir: 'E:\ag-dev\render\cache'
+  max_gb: 100
+extra:
+  python_bin: 'E:\ag-dev\venv\Scripts\python.exe'
+  ytdlp_bin: 'E:\ag-dev\venv\Scripts\yt-dlp.exe'
+  hf_home: 'E:\ag-dev\models'
+  unload_ollama_before_tts: true   # bật nếu cùng máy với ag-scan-worker
+  ollama_url: http://localhost:11434
+```
+
+```sh
+yarn build && node dist/main.js --config config.yaml
+```
+
+### Linux (systemd, cài tay)
+
+Installer chỉ có cho Windows. Trên Linux: venv như trên (`python3.11 -m venv`, torch CUDA trước rồi
+`pip install -r engines/python/requirements.txt yt-dlp`), rồi:
 
 ```ini
 [Unit]
@@ -164,7 +186,7 @@ reserve_interactive:
 
 Khi cấu hình `unload_ollama_before_tts: true`, render worker sẽ gọi Ollama API để giải phóng model trước khi chạy TTS. Trong scan worker, đặt `keep_alive: 0` ngắn để Ollama tự giải phóng khi không có việc.
 
-Nếu VRAM không đủ cho cả hai: ưu tiên render (interactive) bằng cách tắt `scan.ai` trong `kinds` của máy đó.
+Nếu VRAM không đủ cho cả hai: ưu tiên render (interactive) bằng cách tắt `scan.ai` của máy đó ở trang **Máy**.
 
 ### GPU lock
 
