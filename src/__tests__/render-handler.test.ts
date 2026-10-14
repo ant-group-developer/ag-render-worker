@@ -323,6 +323,13 @@ describe('buildThumbnailAss', () => {
 
 // ---- Integration: render with asset inputs ----
 
+/** The settings x264 writes into the stream it encoded (an SEI text), or '' when there are none. */
+function x264Settings(path: string): string {
+  const text = readFileSync(path).toString('latin1');
+  const at = text.indexOf('x264 - core');
+  return at < 0 ? '' : text.slice(at, text.indexOf(String.fromCharCode(0), at));
+}
+
 describe('studio.render_preview handler (asset inputs, integration)', () => {
   let testDir: string;
   let sourceVideoPath: string;
@@ -404,7 +411,7 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
       };
 
       const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
-      const handler = makeStudioRenderPreviewHandler({});
+      const handler = makeStudioRenderPreviewHandler({ encoder: 'cpu' });
       const result = await handler(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
 
       expect(result.manifest).toBe('render.json');
@@ -435,6 +442,8 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
         expect(probe.width).toBe(CANVAS.width);
         expect(probe.height).toBe(CANVAS.height);
         expect(probe.duration).toBeGreaterThan(0);
+        // the lighter preview encode (x264 writes its settings into the stream)
+        expect(x264Settings(uploadedVideo.localPath)).toMatch(/crf=24\.0 .*vbv_maxrate=6000 vbv_bufsize=12000/);
       }
     },
     120_000,
@@ -595,7 +604,7 @@ describe('studio.render_final with 2 asset clips and 1 thumbnail', () => {
       };
 
       const { makeStudioRenderFinalHandler } = await import('../render-handler.js');
-      await makeStudioRenderFinalHandler({})(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+      await makeStudioRenderFinalHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
 
       // Check video was uploaded
       const video = store.uploaded.get('renders/1/final.mp4');
@@ -603,6 +612,9 @@ describe('studio.render_final with 2 asset clips and 1 thumbnail', () => {
       if (video) {
         const probe = await probeVideo(video.localPath);
         expect(probe.duration).toBeGreaterThan(4);
+        // the final keeps its quality encode
+        expect(x264Settings(video.localPath)).toMatch(/crf=18\.0 /);
+        expect(x264Settings(video.localPath)).not.toContain('vbv_maxrate=6000');
       }
 
       // Check thumbnail was uploaded
