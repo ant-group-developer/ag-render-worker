@@ -6,7 +6,8 @@ Nhận job từ [ag-farm](../ag-farm) và xử lý sáu loại việc:
 - `studio.tts` — tổng hợp giọng nói (OmniVoice TTS)
 - `studio.transcribe` — nhận dạng lời nói trong footage (WhisperX), cho kiểu dựng cắt theo shot
 - `studio.export_premiere` — xuất project Adobe Premiere
-- `studio.render_preview` — dựng preview 720p
+- `studio.render_preview` — dựng bản xem trước: cùng khung với bản cuối, mã hoá nhẹ để xem trên trình duyệt (từ 0.9.1:
+  NVENC `p4 cq 25` / x264 `veryfast crf 24`, tối đa 6 Mbit/s; mezzanine và cache dùng chung với bản cuối)
 - `studio.render_final` — dựng bản gốc chất lượng cao
 - `studio.reference_fetch` — tải video YouTube mẫu (≤ 480p, ≤ 30 phút, ≤ 300 MB) cho Studio đo kiểu dựng khi YouTube
   chặn máy chủ Studio; yt-dlp chạy đúng cờ của Studio (không cookie, không đăng nhập), file đẩy lên rồi xoá ngay trên
