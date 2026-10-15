@@ -42,6 +42,23 @@ export function clipSourceId(sourceId: string, index: number): string {
   return `src_${id}`;
 }
 
+/** How far either stream of a finished render may sit from the composition's `total_seconds`. */
+export const DURATION_TOLERANCE_S = 0.5;
+
+/**
+ * `duration_mismatch:<expected>:<actual>` when the video or the audio stream of a finished render is more than
+ * `DURATION_TOLERANCE_S` off `total_seconds` (the stream furthest off is named), else `null`. Studio reads it as
+ * an error of the render: a preview that ended at 13:23 of a 17:30 timeline went out with only a duration line.
+ */
+export function durationMismatch(expected: number, streams: { video_seconds: number | null; audio_seconds: number | null }): string | null {
+  const measured = [streams.video_seconds, streams.audio_seconds].filter((s): s is number => s !== null);
+  if (measured.length === 0) return null;
+  const worst = measured.reduce((a, b) => (Math.abs(b - expected) > Math.abs(a - expected) ? b : a));
+  if (Math.abs(worst - expected) <= DURATION_TOLERANCE_S) return null;
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  return `duration_mismatch:${r3(expected)}:${r3(worst)}`;
+}
+
 // ---- Cache mezzanine (dựa trên file system) ----
 
 const GB = 1024 * 1024 * 1024;
@@ -413,14 +430,20 @@ async function handleStudioRender(
   let finalWidth = payload.canvas.width;
   let finalHeight = payload.canvas.height;
   let finalDuration = 0;
+  /** The episode measured against the composition, stream by stream (`durationMismatch`). */
+  let mismatch: string | null = null;
 
   try {
     const probeResult = await probeMedia(episodePath, ffprobe);
     finalWidth = probeResult.width || finalWidth;
     finalHeight = probeResult.height || finalHeight;
     finalDuration = probeResult.duration_seconds;
+    mismatch = durationMismatch(composition.total_seconds, probeResult);
   } catch {
     finalDuration = report.output.seconds;
+  }
+  if (mismatch !== null) {
+    log.warn('Rendered file is not as long as the composition', { mismatch });
   }
 
   // 10. Thumbnails (chỉ render_final, khi có thumbnail nào được yêu cầu)
@@ -518,6 +541,7 @@ async function handleStudioRender(
   const allWarnings = [
     ...(composition.warnings ?? []),
     ...(report.warnings ?? []),
+    ...(mismatch !== null ? [mismatch] : []),
   ];
 
   const renderManifest = RenderManifestSchema.parse({

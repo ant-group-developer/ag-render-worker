@@ -744,10 +744,30 @@ describe('asset out clamp', () => {
       if (manifest) {
         const warnings = manifest['warnings'] as string[];
         expect(warnings.some((w) => w.includes('clamping'))).toBe(true);
+        // the clamped clip holds its last frame: the file is still as long as the composition
+        expect(warnings.some((w) => w.startsWith('duration_mismatch:'))).toBe(false);
+      }
+      const video = store.uploaded.get('renders/clamp/final.mp4');
+      expect(video).toBeTruthy();
+      if (video) {
+        const { probeMedia } = await import('../ffmpeg-utils.js');
+        const probe = await probeMedia(video.localPath, FFPROBE);
+        expect(Math.abs((probe.video_seconds ?? 0) - 5)).toBeLessThanOrEqual(0.1);
+        expect(Math.abs((probe.audio_seconds ?? 0) - 5)).toBeLessThanOrEqual(0.1);
       }
     },
     120_000,
   );
+});
+
+describe('durationMismatch', () => {
+  test('names the stream furthest from total_seconds once it is more than 0.5 s off', async () => {
+    const { durationMismatch } = await import('../render-handler.js');
+    expect(durationMismatch(1049.98, { video_seconds: 803.2667, audio_seconds: 1050 })).toBe('duration_mismatch:1049.98:803.267');
+    expect(durationMismatch(60, { video_seconds: 60.4, audio_seconds: 59.7 })).toBeNull();
+    expect(durationMismatch(60, { video_seconds: 60, audio_seconds: 61.2 })).toBe('duration_mismatch:60:61.2');
+    expect(durationMismatch(60, { video_seconds: null, audio_seconds: null })).toBeNull();
+  });
 });
 
 // ---- clipSourceId stability ----
