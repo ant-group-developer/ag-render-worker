@@ -1,7 +1,8 @@
 /**
  * Handler studio.render_preview và studio.render_final:
  * Tải composition → thu thập input → download asset inputs → probe/clamp →
- * gọi renderComposition → upload output → (render_final) render thumbnails → upload render.json.
+ * gọi renderComposition → upload output → (render_final) render thumbnails → (payload.inspect) tự kiểm bản render và
+ * upload inspect.json + sheet-NN.jpg → upload render.json.
  *
  * GĐ2: footage clips dùng `asset:<id>` (toàn bộ file gốc, không cắt). `segment:` không còn hỗ trợ.
  */
@@ -13,19 +14,20 @@ import {
   RenderManifestSchema,
   RENDER_MANIFEST_SCHEMA,
   RENDER_MANIFEST_PATH,
+  RENDER_INSPECT_PATH,
   thumbnailOutputPath,
 } from '@ag-farm/protocol';
 import type { JobResult, SignResult } from '@ag-farm/protocol';
 import type { JobContext } from '@ag-farm/worker-sdk';
 import { NonRetryableError } from '@ag-farm/worker-sdk';
 import type { RenderDeps, RenderInput } from '@ag-studio/render';
-import { renderComposition, probeNvenc, CompositionSchema, studioOverlayAss } from '@ag-studio/render';
+import { renderComposition, probeNvenc, CompositionSchema, studioOverlayAss, inspectRender } from '@ag-studio/render';
 import type { Composition } from './composition-utils.js';
 import {
   collectCompositionInputs,
   rewriteCompositionPaths,
 } from './composition-utils.js';
-import { probeMedia, runFfmpeg, resolveFfmpeg, resolveFfprobe } from './ffmpeg-utils.js';
+import { probeMedia, runFfmpeg, resolveFfmpeg, resolveFfprobe, type MediaProbeResult } from './ffmpeg-utils.js';
 import type { RenderWorkerExtra } from './config.js';
 import { ArialMissingError, prepareArialDir } from './fonts.js';
 import { createRequire } from 'node:module';
@@ -432,9 +434,11 @@ async function handleStudioRender(
   let finalDuration = 0;
   /** The episode measured against the composition, stream by stream (`durationMismatch`). */
   let mismatch: string | null = null;
+  let episodeProbe: MediaProbeResult | null = null;
 
   try {
     const probeResult = await probeMedia(episodePath, ffprobe);
+    episodeProbe = probeResult;
     finalWidth = probeResult.width || finalWidth;
     finalHeight = probeResult.height || finalHeight;
     finalDuration = probeResult.duration_seconds;
@@ -527,6 +531,37 @@ async function handleStudioRender(
     }
   }
 
+  // 10b. Tự kiểm (payload.inspect): đứng hình, màn đen, im lặng, độ to từng đoạn, tờ ghép khung hình. Lỗi của lượt kiểm
+  // không làm hỏng bản render đã upload: manifest chỉ thiếu `inspect` và có cảnh báo `inspect_failed`.
+  let inspectEntry: { output: string; sheets: string[] } | undefined;
+  const inspectWarnings: string[] = [];
+  if (payload.inspect) {
+    ctx.progress(95, 'inspect');
+    try {
+      const { inspection, sheets } = await inspectRender(
+        { ffmpeg, clock },
+        {
+          episodePath,
+          composition: composition as unknown as import('@ag-studio/render').Composition,
+          outDir: join(workDir, 'inspect'),
+          hasAudio: episodeProbe?.has_audio ?? true,
+          videoSeconds: episodeProbe?.video_seconds ?? null,
+          audioSeconds: episodeProbe?.audio_seconds ?? null,
+          timeoutSeconds: ffmpegTimeoutMs / 1000,
+          signal: ctx.signal,
+        },
+      );
+      for (const sheet of sheets) await ctx.upload(sheet, basename(sheet), 'image/jpeg');
+      await ctx.uploadJson(RENDER_INSPECT_PATH, inspection);
+      inspectEntry = { output: RENDER_INSPECT_PATH, sheets: sheets.map((sheet) => basename(sheet)) };
+      log.info('Inspected the render', { issues: inspection.issues.length, sheets: sheets.length, seconds: inspection.inspect_seconds });
+    } catch (e) {
+      if (ctx.signal.aborted) throw e;
+      log.warn('Could not inspect the render', { error: String(e) });
+      inspectWarnings.push('inspect_failed');
+    }
+  }
+
   ctx.progress(96, 'upload_manifest');
 
   // 11. Build render manifest
@@ -542,6 +577,7 @@ async function handleStudioRender(
     ...(composition.warnings ?? []),
     ...(report.warnings ?? []),
     ...(mismatch !== null ? [mismatch] : []),
+    ...inspectWarnings,
   ];
 
   const renderManifest = RenderManifestSchema.parse({
@@ -557,6 +593,7 @@ async function handleStudioRender(
     sources,
     warnings: allWarnings,
     thumbnails: thumbnailManifestEntries,
+    ...(inspectEntry !== undefined ? { inspect: inspectEntry } : {}),
   });
 
   await ctx.uploadJson(RENDER_MANIFEST_PATH, renderManifest);
