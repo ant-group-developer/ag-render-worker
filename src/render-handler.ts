@@ -21,7 +21,7 @@ import type { JobResult, SignResult } from '@ag-farm/protocol';
 import type { JobContext } from '@ag-farm/worker-sdk';
 import { NonRetryableError } from '@ag-farm/worker-sdk';
 import type { RenderDeps, RenderInput } from '@ag-studio/render';
-import { renderComposition, probeNvenc, CompositionSchema, studioOverlayAss, inspectRender } from '@ag-studio/render';
+import { renderComposition, probeNvenc, CompositionSchema, studioFontFamilies, studioOverlayAss, inspectRender } from '@ag-studio/render';
 import type { Composition } from './composition-utils.js';
 import {
   collectCompositionInputs,
@@ -29,7 +29,7 @@ import {
 } from './composition-utils.js';
 import { probeMedia, runFfmpeg, resolveFfmpeg, resolveFfprobe, type MediaProbeResult } from './ffmpeg-utils.js';
 import type { RenderWorkerExtra } from './config.js';
-import { ArialMissingError, prepareArialDir } from './fonts.js';
+import { ArialMissingError, FontMissingError, bundledFontsDir, missingBundledFonts, prepareArialDir, prepareFontsDir } from './fonts.js';
 import { createRequire } from 'node:module';
 
 const _require = createRequire(import.meta.url);
@@ -385,20 +385,26 @@ async function handleStudioRender(
     log: (line: string) => log.info(line),
   };
 
-  // Chữ (track T) và phụ đề: dựng overlay.ass từ composition, font Arial lấy từ máy này (xem fonts.ts).
+  // Chữ (track T) và phụ đề: dựng overlay.ass từ composition; font là Arial của máy này và font OFL đóng kèm bản phát
+  // hành (xem fonts.ts). Có Noto Sans JP/KR thì chữ Nhật/Hàn vẽ bằng chúng, không thành ô vuông.
   let assPath: string | null = null;
   let fontsDir: string | null = null;
-  const ass = studioOverlayAss(localComposition as unknown as import('@ag-studio/render').Composition);
+  const studioComposition = localComposition as unknown as import('@ag-studio/render').Composition;
+  const bundledDir = extra.bundled_fonts_dir ?? bundledFontsDir();
+  const lacking = missingBundledFonts(bundledDir);
+  const scriptFonts = !lacking.includes('Noto Sans JP') && !lacking.includes('Noto Sans KR') && !lacking.includes('fonts.json');
+  const ass = studioOverlayAss(studioComposition, { scriptFonts });
   if (ass !== null) {
+    const families = scriptFonts ? studioFontFamilies(studioComposition) : [studioComposition.text_style?.font ?? 'Arial'];
     try {
-      fontsDir = prepareArialDir(join(workDir, 'fonts'), extra.fonts_dir);
+      fontsDir = prepareFontsDir(join(workDir, 'fonts'), { families, fontsDir: extra.fonts_dir, bundledDir });
     } catch (e) {
-      if (e instanceof ArialMissingError) throw new NonRetryableError('fonts_missing', e.message);
+      if (e instanceof ArialMissingError || e instanceof FontMissingError) throw new NonRetryableError('fonts_missing', e.message);
       throw e;
     }
     assPath = join(workDir, 'overlay.ass');
     writeFileSync(assPath, ass, 'utf8');
-    log.info('Burning text and subtitles', { fonts_dir: fontsDir });
+    log.info('Burning text and subtitles', { fonts_dir: fontsDir, families });
   }
 
   const renderInput: RenderInput = {

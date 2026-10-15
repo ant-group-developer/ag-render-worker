@@ -33,6 +33,8 @@ export interface RenderWorkerExtra {
   ffmpeg_timeout_s?: number;
   /** Thư mục chứa arial.ttf. Mặc định: thư mục font của hệ điều hành (xem fonts.ts). */
   fonts_dir?: string;
+  /** Thư mục font OFL đóng kèm (có `fonts.json`). Mặc định: `fonts/` của gói (xem fonts.ts). */
+  bundled_fonts_dir?: string;
   /**
    * WhisperX model that hears a voice sample's words once per studio.tts job when Studio sent none (OmniVoice clones
    * better with them). Default 'large-v3', the model studio.transcribe uses; '' = read without them.
@@ -70,6 +72,7 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
     ffmpeg_timeout_s:
       typeof extra['ffmpeg_timeout_s'] === 'number' ? extra['ffmpeg_timeout_s'] : undefined,
     fonts_dir: typeof extra['fonts_dir'] === 'string' ? extra['fonts_dir'] : undefined,
+    bundled_fonts_dir: typeof extra['bundled_fonts_dir'] === 'string' ? extra['bundled_fonts_dir'] : undefined,
     tts_device: typeof extra['tts_device'] === 'string' ? extra['tts_device'] : undefined,
     encoder:
       extra['encoder'] === 'auto' || extra['encoder'] === 'nvenc' || extra['encoder'] === 'cpu'

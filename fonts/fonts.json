@@ -1,0 +1,51 @@
+{
+  "about": "Font OFL đóng kèm bản phát hành (Studio TEXT_FONTS). File .ttf không nằm trong git: scripts/fetch-fonts.mjs tải về đây từ google/fonts và kiểm sha256; release.mjs đóng gói thư mục này.",
+  "fonts": [
+    {
+      "family": "Be Vietnam Pro",
+      "license": "OFL-1.1",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/OFL.txt",
+      "license_file": "BeVietnamPro-OFL.txt",
+      "files": [
+        { "file": "BeVietnamPro-Regular.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/BeVietnamPro-Regular.ttf", "sha256": null },
+        { "file": "BeVietnamPro-Bold.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/BeVietnamPro-Bold.ttf", "sha256": null }
+      ]
+    },
+    {
+      "family": "Noto Sans JP",
+      "license": "OFL-1.1",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/OFL.txt",
+      "license_file": "NotoSansJP-OFL.txt",
+      "files": [
+        { "file": "NotoSansJP-VF.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf", "sha256": null }
+      ]
+    },
+    {
+      "family": "Noto Sans KR",
+      "license": "OFL-1.1",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/OFL.txt",
+      "license_file": "NotoSansKR-OFL.txt",
+      "files": [
+        { "file": "NotoSansKR-VF.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf", "sha256": null }
+      ]
+    },
+    {
+      "family": "Noto Serif",
+      "license": "OFL-1.1",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/OFL.txt",
+      "license_file": "NotoSerif-OFL.txt",
+      "files": [
+        { "file": "NotoSerif-VF.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/NotoSerif%5Bwdth%2Cwght%5D.ttf", "sha256": null }
+      ]
+    },
+    {
+      "family": "Playfair Display",
+      "license": "OFL-1.1",
+      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/OFL.txt",
+      "license_file": "PlayfairDisplay-OFL.txt",
+      "files": [
+        { "file": "PlayfairDisplay-VF.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf", "sha256": null }
+      ]
+    }
+  ]
+}

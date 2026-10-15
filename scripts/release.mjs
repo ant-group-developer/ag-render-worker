@@ -6,6 +6,7 @@
  *     dist/worker.mjs        mọi JS, gồm cả @ag-farm/* và @ag-studio/render (link: lúc dev)
  *     package.json           chỉ còn ffmpeg-static, ffprobe-static (binary, cài lúc `npm install`)
  *     engines/python/        tts.py (OmniVoice), transcribe.py (WhisperX), engine_io.py, requirements.txt
+ *     fonts/                 font OFL cho chữ trên video (fonts.json; tải bằng scripts/fetch-fonts.mjs, kiểm sha256)
  *     deploy/*               setup-render.ps1 (install.ps1 chạy: Python, venv, torch, yt-dlp, model), mẫu config
  *   release/ag-render-worker-<version>.zip
  *
@@ -70,6 +71,15 @@ cpSync(join(root, 'engines', 'python'), join(out, 'engines', 'python'), {
 // Script mà handler gọi (python-runner.ts, transcribe-handler.ts): thiếu là máy worker báo lỗi Errno 2.
 for (const f of ['tts.py', 'transcribe.py', 'engine_io.py', 'requirements.txt', 'setup_check.py']) {
   if (!existsSync(join(out, 'engines', 'python', f))) throw new Error(`release: thieu engines/python/${f}`);
+}
+// Font OFL (Studio TEXT_FONTS): tải file còn thiếu, kiểm sha256 theo fonts.json, chép cả thư mục (máy thiếu font thì tự
+// kiểm lúc khởi động báo lỗi và hạ mức render).
+const { fetchFonts } = await import(pathToFileURL(join(root, 'scripts', 'fetch-fonts.mjs')).href);
+const fonts = await fetchFonts({ log: () => {} });
+mkdirSync(join(out, 'fonts'), { recursive: true });
+cpSync(join(root, 'fonts', 'fonts.json'), join(out, 'fonts', 'fonts.json'));
+for (const f of fonts.fonts) {
+  for (const name of [f.license_file, ...f.files.map((x) => x.file)]) cpSync(join(root, 'fonts', name), join(out, 'fonts', name));
 }
 cpSync(join(root, 'deploy'), join(out, 'deploy'), { recursive: true });
 // install.ps1 của farm chạy file này lúc cài và lúc cập nhật (Python, venv, torch, yt-dlp, model)
