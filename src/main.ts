@@ -12,6 +12,7 @@ import { makeStudioRenderPreviewHandler, makeStudioRenderFinalHandler } from './
 import { makeStudioExportPremiereHandler } from './premiere-handler.js';
 import { makeStudioTranscribeHandler } from './transcribe-handler.js';
 import { makeStudioReferenceFetchHandler } from './reference-handler.js';
+import { selfCheck } from './self-check.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -47,6 +48,11 @@ async function main(): Promise<void> {
 
   console.log(`ag-render-worker v${version} khoi dong voi config: ${configPath}`);
 
+  // Tự kiểm: thiếu file thì vẫn chạy, nhưng không khai việc sẽ hỏng (self-check.ts)
+  const check = selfCheck({ ...(extra.fonts_dir ? { fontsDir: extra.fonts_dir } : {}), ...(extra.bundled_fonts_dir ? { bundledDir: extra.bundled_fonts_dir } : {}) });
+  for (const problem of check.problems) console.error(`[self-check] LOI: ${problem}`);
+  if (check.problems.length === 0) console.log(`[self-check] du engine Python, font; muc render ${check.studioRender}`);
+
   // Tạo handlers với extra config
   const ttHandler = makeStudioTtsHandler({ extra });
   const previewHandler = makeStudioRenderPreviewHandler(extra);
@@ -59,7 +65,7 @@ async function main(): Promise<void> {
     config,
     version,
     // studio.tts and studio.transcribe need python: true, i.e. extra.python_bin imports torch
-    capabilitiesOptions: capabilitiesOptionsFor(extra),
+    capabilitiesOptions: capabilitiesOptionsFor(extra, undefined, check),
     // Máy cài bằng install.ps1 (config có updater_task): tự lên bản mới khi hub phát hành.
     selfUpdate: { package: RELEASE_PACKAGE },
     handlers: {

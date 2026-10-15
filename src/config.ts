@@ -112,13 +112,15 @@ export function resolveYtdlp(extra: RenderWorkerExtra, exists: (p: string) => bo
 export function capabilitiesOptionsFor(
   extra: RenderWorkerExtra,
   exists: (p: string) => boolean = existsSync,
+  /** Kết quả tự kiểm lúc khởi động (self-check.ts): thiếu engine Python thì không dò Python, thiếu font thì hạ mức render. */
+  check?: { python: boolean; studioRender: number },
 ): CapabilitiesOptions {
   return {
-    detectPythonTorch: true,
+    detectPythonTorch: check?.python ?? true,
     pythonBin: extra.python_bin,
     ffmpegPath: resolveFfmpeg(),
     ytdlpBin: resolveYtdlp(extra, exists),
     // the composition features this build renders: the farm sends a newer composition only to a machine at its level
-    studioRender: RENDER_FEATURE_LEVEL,
+    studioRender: check?.studioRender ?? RENDER_FEATURE_LEVEL,
   };
 }
