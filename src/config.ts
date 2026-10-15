@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { CapabilitiesOptions } from '@ag-farm/worker-sdk';
+import { RENDER_FEATURE_LEVEL } from '@ag-studio/render';
 import { resolveFfmpeg } from './ffmpeg-utils.js';
 
 /**
@@ -114,5 +115,7 @@ export function capabilitiesOptionsFor(
     pythonBin: extra.python_bin,
     ffmpegPath: resolveFfmpeg(),
     ytdlpBin: resolveYtdlp(extra, exists),
+    // the composition features this build renders: the farm sends a newer composition only to a machine at its level
+    studioRender: RENDER_FEATURE_LEVEL,
   };
 }
