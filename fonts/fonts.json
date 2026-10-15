@@ -1,5 +1,5 @@
 {
-  "about": "Font OFL đóng kèm bản phát hành (Studio TEXT_FONTS). File .ttf không nằm trong git: scripts/fetch-fonts.mjs tải về đây từ google/fonts và kiểm sha256; release.mjs đóng gói thư mục này.",
+  "about": "Font OFL đóng kèm bản phát hành (Studio TEXT_FONTS). File font không nằm trong git: scripts/fetch-fonts.mjs tải về đây từ google/fonts (Noto Sans JP/KR: bản tĩnh Regular/Bold của notofonts/noto-cjk, vì bản biến thiên của google/fonts có thể mặc định là Thin, tên \"Noto Sans JP Thin\", libass không chọn được) và kiểm sha256; release.mjs đóng gói thư mục này.",
   "fonts": [
     {
       "family": "Be Vietnam Pro",
@@ -7,26 +7,52 @@
       "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/OFL.txt",
       "license_file": "BeVietnamPro-OFL.txt",
       "files": [
-        { "file": "BeVietnamPro-Regular.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/BeVietnamPro-Regular.ttf", "sha256": null },
-        { "file": "BeVietnamPro-Bold.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/BeVietnamPro-Bold.ttf", "sha256": null }
+        {
+          "file": "BeVietnamPro-Regular.ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/BeVietnamPro-Regular.ttf",
+          "sha256": "cd1ef6e9d7db28ad5cdb88a65ccbe693870e60d340b791f349d248342b4fe4c3"
+        },
+        {
+          "file": "BeVietnamPro-Bold.ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/BeVietnamPro-Bold.ttf",
+          "sha256": "7f738fe5c43c8872807b20e2d30d42163618de8a4daf7f48a939adac32c16847"
+        }
       ]
     },
     {
       "family": "Noto Sans JP",
       "license": "OFL-1.1",
-      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/OFL.txt",
+      "license_url": "https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/LICENSE",
       "license_file": "NotoSansJP-OFL.txt",
       "files": [
-        { "file": "NotoSansJP-VF.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf", "sha256": null }
+        {
+          "file": "NotoSansJP-Regular.otf",
+          "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf",
+          "sha256": "dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073"
+        },
+        {
+          "file": "NotoSansJP-Bold.otf",
+          "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/JP/NotoSansJP-Bold.otf",
+          "sha256": "1b0edfb500b73a4fa8a4fcaae1bbbd403994e08e73e3e0da37e70d3853f42c5f"
+        }
       ]
     },
     {
       "family": "Noto Sans KR",
       "license": "OFL-1.1",
-      "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/OFL.txt",
+      "license_url": "https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/LICENSE",
       "license_file": "NotoSansKR-OFL.txt",
       "files": [
-        { "file": "NotoSansKR-VF.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf", "sha256": null }
+        {
+          "file": "NotoSansKR-Regular.otf",
+          "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/KR/NotoSansKR-Regular.otf",
+          "sha256": "69975a0ac8472717870aefeab0a4d52739308d90856b9955313b2ad5e0148d68"
+        },
+        {
+          "file": "NotoSansKR-Bold.otf",
+          "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/KR/NotoSansKR-Bold.otf",
+          "sha256": "5a6ceb287ed2fc6cfc6213144ebea68cbd94b20fc9eb873d8486493bf02d9bda"
+        }
       ]
     },
     {
@@ -35,7 +61,11 @@
       "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/OFL.txt",
       "license_file": "NotoSerif-OFL.txt",
       "files": [
-        { "file": "NotoSerif-VF.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/NotoSerif%5Bwdth%2Cwght%5D.ttf", "sha256": null }
+        {
+          "file": "NotoSerif-VF.ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/NotoSerif%5Bwdth%2Cwght%5D.ttf",
+          "sha256": "4d8e6761424656867019081a1a01336f3cb086982682698714054fc33f782713"
+        }
       ]
     },
     {
@@ -44,7 +74,11 @@
       "license_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/OFL.txt",
       "license_file": "PlayfairDisplay-OFL.txt",
       "files": [
-        { "file": "PlayfairDisplay-VF.ttf", "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf", "sha256": null }
+        {
+          "file": "PlayfairDisplay-VF.ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf",
+          "sha256": "c40f2293766a503bc70cce9e512ef844a4ccb7cbcde792fe2ea31d191917d8d6"
+        }
       ]
     }
   ]

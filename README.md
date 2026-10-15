@@ -74,8 +74,12 @@ cập nhật trong khoảng 15 phút. Hub khác dùng biến khác: `--key-env F
 bằng scp; `--publish <thư mục>` vẫn chép vào một thư mục latest.json nếu cần.
 
 Gói có font OFL cho chữ trên video (`fonts/`, danh sách `fonts/fonts.json`): `release.mjs` tự tải file còn thiếu từ
-google/fonts và kiểm sha256. File `.ttf` không nằm trong git. Thêm hoặc đổi bản một font: sửa `fonts.json` (để
-`sha256: null`), chạy `node scripts/fetch-fonts.mjs --pin` một lần rồi commit `fonts.json`.
+google/fonts (Noto Sans JP/KR: notofonts/noto-cjk) và kiểm sha256. File font không nằm trong git. Thêm hoặc đổi bản một
+font: sửa `fonts.json` (để `sha256: null`), chạy `node scripts/fetch-fonts.mjs --pin` một lần rồi commit `fonts.json`.
+Font phải là bản tĩnh, hoặc bản biến thiên mà kiểu mặc định là Regular: libass chỉ đọc tên họ (name ID 1) của kiểu mặc
+định, nên `NotoSansJP[wght].ttf` của google/fonts (mặc định Thin, họ "Noto Sans JP Thin") không bao giờ được chọn và chữ
+Nhật rơi về font hệ thống (Linux không có thì ra ô vuông). Kiểm bằng `ffmpeg -v trace … -vf ass=…:fontsdir=…`: dòng
+`fontselect: (Noto Sans JP, 700, 0) -> NotoSansJP-Bold` là đúng.
 
 ### Kiểm các máy sau mỗi lần phát hành
 

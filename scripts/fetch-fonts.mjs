@@ -4,8 +4,8 @@
  *   node scripts/fetch-fonts.mjs          tải file còn thiếu; file có sha256 trong fonts.json phải khớp
  *   node scripts/fetch-fonts.mjs --pin    như trên, rồi ghi sha256 của file chưa có vào fonts.json (lần đầu, hoặc khi đổi bản font)
  *
- * release.mjs gọi script này trước khi đóng gói, nên bản phát hành không bao giờ thiếu font. File .ttf và giấy phép
- * không nằm trong git (.gitignore).
+ * release.mjs gọi script này trước khi đóng gói, nên bản phát hành không bao giờ thiếu font. File font (.ttf/.otf) và
+ * giấy phép không nằm trong git (.gitignore).
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
