@@ -2,7 +2,7 @@
 
 Worker dựng video cho AG Studio, chạy trên máy cấu hình cao.
 
-Nhận job từ [ag-farm](../ag-farm) và xử lý sáu loại việc:
+Nhận job từ [ag-farm](../ag-farm) và xử lý bảy loại việc:
 - `studio.tts` — tổng hợp giọng nói (OmniVoice TTS)
 - `studio.transcribe` — nhận dạng lời nói trong footage (WhisperX), cho kiểu dựng cắt theo shot
 - `studio.export_premiere` — xuất project Adobe Premiere
@@ -12,6 +12,8 @@ Nhận job từ [ag-farm](../ag-farm) và xử lý sáu loại việc:
 - `studio.reference_fetch` — tải video YouTube mẫu (≤ 480p, ≤ 30 phút, ≤ 300 MB) cho Studio đo kiểu dựng khi YouTube
   chặn máy chủ Studio; yt-dlp chạy đúng cờ của Studio (không cookie, không đăng nhập), file đẩy lên rồi xoá ngay trên
   máy. Chỉ máy có yt-dlp nhận loại này.
+- `studio.beats` — nhịp của nhạc nền (librosa: từng phách, đầu ô nhịp, BPM; mỗi bài của nhạc ghép phân tích riêng) để
+  Studio cắt cảnh đúng phách (`engines/python/beats.py`). Chạy CPU, nhận trên máy khai `python` như `studio.tts`.
 
 ---
 
@@ -34,8 +36,8 @@ nhiêu lần cũng được):
   (`HF_HOME` của worker). requirements và bản torch không đổi thì bỏ qua pip (dấu `venv\ag-setup.stamp`);
 - log ở `C:\ag-farm\logs\setup.log`, kết quả ở `C:\ag-farm\logs\setup-result.json`.
 
-Máy không có GPU NVIDIA vẫn dựng video (`studio.render_*`, `studio.export_premiere`), không nhận `studio.tts` và
-`studio.transcribe`.
+Máy không có GPU NVIDIA vẫn dựng video (`studio.render_*`, `studio.export_premiere`), không nhận `studio.tts`,
+`studio.transcribe` và `studio.beats`.
 
 Sau mỗi lần cài/cập nhật, `C:\ag-farm\render\config.yaml` được ghi lại: giữ `name`, `token`, `hub_url`, `cache`,
 `schedule` và mọi khoá anh tự thêm (kể cả trong `extra`); viết lại các khoá installer quản lý trong `extra`
@@ -108,8 +110,8 @@ $r.items | Select-Object name, online, agent_version, @{ n = 'studio_render'; e 
 3. Bản xem trước nhẹ (tier `preview`, tối đa 6 Mbit/s, từ 0.9.1): một bản xem trước 10 phút nặng quá ~450 MB là máy render
    nó còn bản cũ.
 
-Worker tự kiểm khi khởi động (`src/self-check.ts`): thiếu `engines/python/tts.py`, `transcribe.py` hay `engine_io.py`
-thì log lỗi và không khai Python (hub không giao `studio.tts`/`studio.transcribe`); thiếu font đóng kèm thì log lỗi và khai
+Worker tự kiểm khi khởi động (`src/self-check.ts`): thiếu `engines/python/tts.py`, `transcribe.py`, `beats.py` hay
+`engine_io.py` thì log lỗi và không khai Python (hub không giao `studio.tts`/`studio.transcribe`/`studio.beats`); thiếu font đóng kèm thì log lỗi và khai
 mức render ngay dưới mức font; thiếu Arial thì log lỗi.
 
 ### Loại job máy nhận

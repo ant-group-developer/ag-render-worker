@@ -24,13 +24,13 @@ function machine(o: { engines: string[]; fonts: boolean; arial: boolean }) {
 
 describe('self-check at startup', () => {
   test('a complete machine has no problem and reports this build\'s render level', () => {
-    const check = machine({ engines: ['tts.py', 'transcribe.py', 'engine_io.py'], fonts: true, arial: true });
+    const check = machine({ engines: ['tts.py', 'transcribe.py', 'beats.py', 'engine_io.py'], fonts: true, arial: true });
     expect(check).toMatchObject({ problems: [], python: true, studioRender: RENDER_FEATURE_LEVEL, missingEngines: [], missingFonts: [] });
     expect(capabilitiesOptionsFor({}, () => false, check)).toMatchObject({ detectPythonTorch: true, studioRender: RENDER_FEATURE_LEVEL });
   });
 
   test('a missing python engine: no python jobs; missing fonts: the render level below fonts; no Arial: said', () => {
-    const check = machine({ engines: ['tts.py', 'engine_io.py'], fonts: false, arial: false });
+    const check = machine({ engines: ['tts.py', 'beats.py', 'engine_io.py'], fonts: false, arial: false });
     expect(check.missingEngines).toEqual(['transcribe.py']);
     expect(check.missingFonts).toEqual(['Noto Sans JP']);
     expect(check.python).toBe(false);

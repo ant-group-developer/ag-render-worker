@@ -2,6 +2,8 @@
 
 > **Nguồn:** Chép từ `ag-studio/engines/python/` (tts.py, transcribe.py, engine_io.py, requirements.txt), không sửa.
 > `tts.py` chạy job `studio.tts`, `transcribe.py` chạy job `studio.transcribe`.
+> `beats.py` (riêng của ag-render-worker, không có ở ag-studio) chạy job `studio.beats`: nhịp của nhạc nền bằng librosa,
+> job `{ beats_per_bar, items: [{ track_id, audio_path, parts }] }` (WAV mono worker đổi sẵn bằng ffmpeg).
 >
 > ```
 > python engines/python/transcribe.py --job <job.json> --result <result.json> [--dry-run]

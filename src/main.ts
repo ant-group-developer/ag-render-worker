@@ -12,6 +12,7 @@ import { makeStudioRenderPreviewHandler, makeStudioRenderFinalHandler } from './
 import { makeStudioExportPremiereHandler } from './premiere-handler.js';
 import { makeStudioTranscribeHandler } from './transcribe-handler.js';
 import { makeStudioReferenceFetchHandler } from './reference-handler.js';
+import { makeStudioBeatsHandler } from './beats-handler.js';
 import { selfCheck } from './self-check.js';
 
 const _require = createRequire(import.meta.url);
@@ -60,11 +61,12 @@ async function main(): Promise<void> {
   const exportPremiereHandler = makeStudioExportPremiereHandler(extra);
   const transcribeHandler = makeStudioTranscribeHandler({ extra });
   const referenceFetchHandler = makeStudioReferenceFetchHandler({ extra });
+  const beatsHandler = makeStudioBeatsHandler({ extra });
 
   await runWorker({
     config,
     version,
-    // studio.tts and studio.transcribe need python: true, i.e. extra.python_bin imports torch
+    // studio.tts, studio.transcribe and studio.beats need python: true, i.e. extra.python_bin imports torch
     capabilitiesOptions: capabilitiesOptionsFor(extra, undefined, check),
     // Máy cài bằng install.ps1 (config có updater_task): tự lên bản mới khi hub phát hành.
     selfUpdate: { package: RELEASE_PACKAGE },
@@ -76,6 +78,8 @@ async function main(): Promise<void> {
       'studio.transcribe': transcribeHandler,
       // only machines with yt-dlp (engines.ytdlp) report this kind
       'studio.reference_fetch': referenceFetchHandler,
+      // librosa, in the same venv (a dependency of OmniVoice too)
+      'studio.beats': beatsHandler,
     },
   });
 }
