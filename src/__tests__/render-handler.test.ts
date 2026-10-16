@@ -431,6 +431,9 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
         expect(parsed.data.height).toBe(CANVAS.height);
         expect(parsed.data.duration_s).toBeGreaterThan(0);
         expect(parsed.data.thumbnails).toEqual([]);
+        // nothing asked for an inspection
+        expect(parsed.data.inspect).toBeUndefined();
+        expect(store.jsonUploads.has('inspect.json')).toBe(false);
         // sources should list the asset input
         expect(parsed.data.sources.some((s) => s.input === 'asset:asset-001')).toBe(true);
       }
@@ -445,6 +448,50 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
         // the lighter preview encode (x264 writes its settings into the stream)
         expect(x264Settings(uploadedVideo.localPath)).toMatch(/crf=24\.0 .*vbv_maxrate=6000 vbv_bufsize=12000/);
       }
+    },
+    120_000,
+  );
+
+  test(
+    'inspect: true checks the uploaded render and names inspect.json and the sheets in the manifest',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      sign.register('asset:asset-001', sourceVideoPath);
+      sign.register('stage:tts/L001.wav', narrationWavPath);
+      const workDir = join(testDir, `run-inspect-${randomUUID()}`);
+      mkdirSync(workDir, { recursive: true });
+      const compositionPath = join(workDir, 'composition.json');
+      writeFileSync(compositionPath, JSON.stringify(buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS)), 'utf8');
+      sign.register('stage:renders/1/composition.json', compositionPath);
+      const payload = {
+        production_id: 'prod-test', revision: 1, composition: 'stage:renders/1/composition.json',
+        canvas: CANVAS, output: 'renders/1/preview.mp4', inspect: true,
+      };
+      const ctx = {
+        job: { id: 'job-inspect', type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: (msg: string, ...args: unknown[]) => console.warn('[render]', msg, ...args), error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: store.makeDownload(sign),
+        upload: store.makeUpload(),
+        uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      const { RenderManifestSchema } = await import('@ag-farm/protocol');
+      const manifest = RenderManifestSchema.parse(store.jsonUploads.get('render.json'));
+      expect(manifest.inspect).toEqual({ output: 'inspect.json', sheets: ['sheet-01.jpg'] });
+      expect(manifest.warnings).not.toContain('inspect_failed');
+      const { RenderInspectionSchema } = await import('@harness/contracts');
+      const inspection = RenderInspectionSchema.parse(store.jsonUploads.get('inspect.json'));
+      expect(inspection.expected_seconds).toBe(ASSET_DURATION);
+      expect(inspection.segments).toHaveLength(1);
+      expect(inspection.sheets[0]).toMatchObject({ file: 'sheet-01.jpg', frames: 1 });
+      // the fixture's source and narration are both silent
+      expect(inspection.issues).toEqual([expect.objectContaining({ code: 'silence', severity: 'error' })]);
+      expect(store.uploaded.get('sheet-01.jpg')?.contentType).toBe('image/jpeg');
     },
     120_000,
   );
@@ -744,10 +791,30 @@ describe('asset out clamp', () => {
       if (manifest) {
         const warnings = manifest['warnings'] as string[];
         expect(warnings.some((w) => w.includes('clamping'))).toBe(true);
+        // the clamped clip holds its last frame: the file is still as long as the composition
+        expect(warnings.some((w) => w.startsWith('duration_mismatch:'))).toBe(false);
+      }
+      const video = store.uploaded.get('renders/clamp/final.mp4');
+      expect(video).toBeTruthy();
+      if (video) {
+        const { probeMedia } = await import('../ffmpeg-utils.js');
+        const probe = await probeMedia(video.localPath, FFPROBE);
+        expect(Math.abs((probe.video_seconds ?? 0) - 5)).toBeLessThanOrEqual(0.1);
+        expect(Math.abs((probe.audio_seconds ?? 0) - 5)).toBeLessThanOrEqual(0.1);
       }
     },
     120_000,
   );
+});
+
+describe('durationMismatch', () => {
+  test('names the stream furthest from total_seconds once it is more than 0.5 s off', async () => {
+    const { durationMismatch } = await import('../render-handler.js');
+    expect(durationMismatch(1049.98, { video_seconds: 803.2667, audio_seconds: 1050 })).toBe('duration_mismatch:1049.98:803.267');
+    expect(durationMismatch(60, { video_seconds: 60.4, audio_seconds: 59.7 })).toBeNull();
+    expect(durationMismatch(60, { video_seconds: 60, audio_seconds: 61.2 })).toBe('duration_mismatch:60:61.2');
+    expect(durationMismatch(60, { video_seconds: null, audio_seconds: null })).toBeNull();
+  });
 });
 
 // ---- clipSourceId stability ----

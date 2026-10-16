@@ -1,16 +1,21 @@
 /**
- * Arial cho chữ và phụ đề burn vào video.
+ * Font cho chữ và phụ đề burn vào video.
  *
- * Giấy phép Arial không cho chép file font vào repo hay bucket, nên worker lấy Arial đã cài trên máy:
- * Windows có sẵn trong `%WINDIR%\Fonts`, Linux cài gói `ttf-mscorefonts-installer`. Chỉ các file Arial
- * được chép sang một thư mục riêng của job rồi đưa cho libass (`fontsdir`), để libass không phải quét cả
- * thư mục font của hệ thống và không lấy nhầm font khác khi thiếu Arial.
+ * - Arial: giấy phép không cho chép file font vào repo hay bucket, nên worker lấy Arial đã cài trên máy: Windows có sẵn
+ *   trong `%WINDIR%\Fonts`, Linux cài gói `ttf-mscorefonts-installer`.
+ * - Font OFL đóng kèm bản phát hành (`fonts/`, danh sách ở `fonts/fonts.json`, Studio `TEXT_FONTS`): Be Vietnam Pro,
+ *   Noto Sans JP/KR, Noto Serif, Playfair Display. Noto Sans JP/KR còn vẽ chữ Nhật/Hàn dù font của kênh là gì.
+ *
+ * Mỗi job chỉ chép đúng các font composition cần sang một thư mục riêng rồi đưa cho libass (`fontsdir`), để libass không
+ * phải quét cả thư mục font của hệ thống và không lấy nhầm font khác.
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Tên file Arial thường gặp (không phân biệt hoa thường): thường, đậm, nghiêng, đậm nghiêng. */
 const ARIAL_FILE = /^arial(bd|i|bi|_bold|_italic|_bold_italic)?\.ttf$/i;
+const ARIAL = 'Arial';
 
 /** Thư mục font mặc định theo hệ điều hành, xét theo thứ tự. */
 export function defaultFontDirs(): string[] {
@@ -60,5 +65,78 @@ export function prepareArialDir(destDir: string, fontsDir?: string): string {
   if (files.length === 0) throw new ArialMissingError(fontsDir);
   mkdirSync(destDir, { recursive: true });
   for (const f of files) copyFileSync(f, join(destDir, f.split(/[\\/]/).pop()!));
+  return destDir;
+}
+
+// ---------------------------------------------------------------------------
+// Font OFL đóng kèm bản phát hành
+// ---------------------------------------------------------------------------
+
+export interface BundledFont {
+  family: string;
+  license: string;
+  license_file: string;
+  files: { file: string; url: string; sha256: string | null }[];
+}
+
+/** `fonts/` của gói: cạnh `dist/` (bản phát hành: `dist/worker.mjs`; lúc dev: `dist/*.js` hoặc `src/*.ts`). */
+export function bundledFontsDir(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), '..', 'fonts');
+}
+
+/** Danh sách font đóng kèm (`fonts.json`); thư mục không có danh sách = không font nào. */
+export function readBundledFonts(dir: string): BundledFont[] {
+  const path = join(dir, 'fonts.json');
+  if (!existsSync(path)) return [];
+  return (JSON.parse(readFileSync(path, 'utf8')) as { fonts: BundledFont[] }).fonts;
+}
+
+/** Font đóng kèm mà thư mục thiếu file (danh sách rỗng = đủ). Không đọc được danh sách thì báo thiếu `fonts.json`. */
+export function missingBundledFonts(dir: string): string[] {
+  let fonts: BundledFont[];
+  try {
+    fonts = readBundledFonts(dir);
+  } catch {
+    return ['fonts.json'];
+  }
+  if (fonts.length === 0) return ['fonts.json'];
+  return fonts.filter((f) => f.files.some((x) => !existsSync(join(dir, x.file)))).map((f) => f.family);
+}
+
+export class FontMissingError extends Error {
+  constructor(readonly families: string[]) {
+    super(`Máy render thiếu font ${families.join(', ')} (thư mục fonts/ của bản phát hành ag-render-worker): cài lại bản mới nhất`);
+    this.name = 'FontMissingError';
+  }
+}
+
+/**
+ * Chép vào `destDir` các font cho `families` (Studio `studioFontFamilies`): Arial của máy (luôn chép khi máy có, vì đó
+ * là font mặc định; thiếu mà cần thì `ArialMissingError`) và file của các font đóng kèm (thiếu thì `FontMissingError`).
+ */
+export function prepareFontsDir(destDir: string, o: { families: readonly string[]; fontsDir?: string; bundledDir?: string }): string {
+  mkdirSync(destDir, { recursive: true });
+  const arial = findArialFiles(o.fontsDir);
+  if (arial.length === 0 && o.families.includes(ARIAL)) throw new ArialMissingError(o.fontsDir);
+  for (const f of arial) copyFileSync(f, join(destDir, f.split(/[\\/]/).pop()!));
+
+  const bundledDir = o.bundledDir ?? bundledFontsDir();
+  let bundled: BundledFont[] = [];
+  try {
+    bundled = readBundledFonts(bundledDir);
+  } catch {
+    bundled = [];
+  }
+  const missing: string[] = [];
+  for (const family of o.families) {
+    if (family === ARIAL) continue;
+    const font = bundled.find((f) => f.family === family);
+    if (!font || font.files.some((x) => !existsSync(join(bundledDir, x.file)))) {
+      missing.push(family);
+      continue;
+    }
+    for (const x of font.files) copyFileSync(join(bundledDir, x.file), join(destDir, x.file));
+  }
+  if (missing.length > 0) throw new FontMissingError(missing);
   return destDir;
 }

@@ -6,3 +6,7 @@ __pycache__/
 release/
 .claude
 .history
+fonts/*.ttf
+fonts/*.txt
+fonts/*.part
+fonts/*.otf
