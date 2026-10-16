@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { ROLE_PACKAGES } from '@ag-farm/protocol';
 import { RELEASE_PACKAGE, capabilitiesOptionsFor, getExtra, resolveYtdlp } from '../config.js';
 import { resolveFfmpeg } from '../ffmpeg-utils.js';
+import { RENDER_FEATURE_LEVEL } from '@ag-studio/render';
 
 const nothingExists = () => false;
 
@@ -30,7 +31,9 @@ describe('render worker config', () => {
       pythonBin: 'E:/venv/Scripts/python.exe',
       ffmpegPath: resolveFfmpeg(),
       ytdlpBin: 'yt-dlp',
+      studioRender: RENDER_FEATURE_LEVEL,
     });
+    expect(RENDER_FEATURE_LEVEL).toBeGreaterThanOrEqual(1);
     expect(capabilitiesOptionsFor({}, nothingExists)).toMatchObject({ detectPythonTorch: true, pythonBin: undefined });
   });
 

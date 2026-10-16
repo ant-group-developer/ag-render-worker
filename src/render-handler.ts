@@ -1,7 +1,8 @@
 /**
  * Handler studio.render_preview và studio.render_final:
  * Tải composition → thu thập input → download asset inputs → probe/clamp →
- * gọi renderComposition → upload output → (render_final) render thumbnails → upload render.json.
+ * gọi renderComposition → upload output → (render_final) render thumbnails → (payload.inspect) tự kiểm bản render và
+ * upload inspect.json + sheet-NN.jpg → upload render.json.
  *
  * GĐ2: footage clips dùng `asset:<id>` (toàn bộ file gốc, không cắt). `segment:` không còn hỗ trợ.
  */
@@ -13,21 +14,22 @@ import {
   RenderManifestSchema,
   RENDER_MANIFEST_SCHEMA,
   RENDER_MANIFEST_PATH,
+  RENDER_INSPECT_PATH,
   thumbnailOutputPath,
 } from '@ag-farm/protocol';
 import type { JobResult, SignResult } from '@ag-farm/protocol';
 import type { JobContext } from '@ag-farm/worker-sdk';
 import { NonRetryableError } from '@ag-farm/worker-sdk';
 import type { RenderDeps, RenderInput } from '@ag-studio/render';
-import { renderComposition, probeNvenc, CompositionSchema, studioOverlayAss } from '@ag-studio/render';
+import { renderComposition, probeNvenc, CompositionSchema, studioFontFamilies, studioOverlayAss, inspectRender } from '@ag-studio/render';
 import type { Composition } from './composition-utils.js';
 import {
   collectCompositionInputs,
   rewriteCompositionPaths,
 } from './composition-utils.js';
-import { probeMedia, runFfmpeg, resolveFfmpeg, resolveFfprobe } from './ffmpeg-utils.js';
+import { probeMedia, runFfmpeg, resolveFfmpeg, resolveFfprobe, type MediaProbeResult } from './ffmpeg-utils.js';
 import type { RenderWorkerExtra } from './config.js';
-import { ArialMissingError, prepareArialDir } from './fonts.js';
+import { ArialMissingError, FontMissingError, bundledFontsDir, missingBundledFonts, prepareArialDir, prepareFontsDir } from './fonts.js';
 import { createRequire } from 'node:module';
 
 const _require = createRequire(import.meta.url);
@@ -40,6 +42,23 @@ export function clipSourceId(sourceId: string, index: number): string {
   let id = CROCKFORD[bytes[0]! % 8]!;
   for (let i = 1; i < 26; i++) id += CROCKFORD[bytes[i]! % 32]!;
   return `src_${id}`;
+}
+
+/** How far either stream of a finished render may sit from the composition's `total_seconds`. */
+export const DURATION_TOLERANCE_S = 0.5;
+
+/**
+ * `duration_mismatch:<expected>:<actual>` when the video or the audio stream of a finished render is more than
+ * `DURATION_TOLERANCE_S` off `total_seconds` (the stream furthest off is named), else `null`. Studio reads it as
+ * an error of the render: a preview that ended at 13:23 of a 17:30 timeline went out with only a duration line.
+ */
+export function durationMismatch(expected: number, streams: { video_seconds: number | null; audio_seconds: number | null }): string | null {
+  const measured = [streams.video_seconds, streams.audio_seconds].filter((s): s is number => s !== null);
+  if (measured.length === 0) return null;
+  const worst = measured.reduce((a, b) => (Math.abs(b - expected) > Math.abs(a - expected) ? b : a));
+  if (Math.abs(worst - expected) <= DURATION_TOLERANCE_S) return null;
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  return `duration_mismatch:${r3(expected)}:${r3(worst)}`;
 }
 
 // ---- Cache mezzanine (dựa trên file system) ----
@@ -366,20 +385,26 @@ async function handleStudioRender(
     log: (line: string) => log.info(line),
   };
 
-  // Chữ (track T) và phụ đề: dựng overlay.ass từ composition, font Arial lấy từ máy này (xem fonts.ts).
+  // Chữ (track T) và phụ đề: dựng overlay.ass từ composition; font là Arial của máy này và font OFL đóng kèm bản phát
+  // hành (xem fonts.ts). Có Noto Sans JP/KR thì chữ Nhật/Hàn vẽ bằng chúng, không thành ô vuông.
   let assPath: string | null = null;
   let fontsDir: string | null = null;
-  const ass = studioOverlayAss(localComposition as unknown as import('@ag-studio/render').Composition);
+  const studioComposition = localComposition as unknown as import('@ag-studio/render').Composition;
+  const bundledDir = extra.bundled_fonts_dir ?? bundledFontsDir();
+  const lacking = missingBundledFonts(bundledDir);
+  const scriptFonts = !lacking.includes('Noto Sans JP') && !lacking.includes('Noto Sans KR') && !lacking.includes('fonts.json');
+  const ass = studioOverlayAss(studioComposition, { scriptFonts });
   if (ass !== null) {
+    const families = scriptFonts ? studioFontFamilies(studioComposition) : [studioComposition.text_style?.font ?? 'Arial'];
     try {
-      fontsDir = prepareArialDir(join(workDir, 'fonts'), extra.fonts_dir);
+      fontsDir = prepareFontsDir(join(workDir, 'fonts'), { families, fontsDir: extra.fonts_dir, bundledDir });
     } catch (e) {
-      if (e instanceof ArialMissingError) throw new NonRetryableError('fonts_missing', e.message);
+      if (e instanceof ArialMissingError || e instanceof FontMissingError) throw new NonRetryableError('fonts_missing', e.message);
       throw e;
     }
     assPath = join(workDir, 'overlay.ass');
     writeFileSync(assPath, ass, 'utf8');
-    log.info('Burning text and subtitles', { fonts_dir: fontsDir });
+    log.info('Burning text and subtitles', { fonts_dir: fontsDir, families });
   }
 
   const renderInput: RenderInput = {
@@ -413,14 +438,22 @@ async function handleStudioRender(
   let finalWidth = payload.canvas.width;
   let finalHeight = payload.canvas.height;
   let finalDuration = 0;
+  /** The episode measured against the composition, stream by stream (`durationMismatch`). */
+  let mismatch: string | null = null;
+  let episodeProbe: MediaProbeResult | null = null;
 
   try {
     const probeResult = await probeMedia(episodePath, ffprobe);
+    episodeProbe = probeResult;
     finalWidth = probeResult.width || finalWidth;
     finalHeight = probeResult.height || finalHeight;
     finalDuration = probeResult.duration_seconds;
+    mismatch = durationMismatch(composition.total_seconds, probeResult);
   } catch {
     finalDuration = report.output.seconds;
+  }
+  if (mismatch !== null) {
+    log.warn('Rendered file is not as long as the composition', { mismatch });
   }
 
   // 10. Thumbnails (chỉ render_final, khi có thumbnail nào được yêu cầu)
@@ -504,6 +537,37 @@ async function handleStudioRender(
     }
   }
 
+  // 10b. Tự kiểm (payload.inspect): đứng hình, màn đen, im lặng, độ to từng đoạn, tờ ghép khung hình. Lỗi của lượt kiểm
+  // không làm hỏng bản render đã upload: manifest chỉ thiếu `inspect` và có cảnh báo `inspect_failed`.
+  let inspectEntry: { output: string; sheets: string[] } | undefined;
+  const inspectWarnings: string[] = [];
+  if (payload.inspect) {
+    ctx.progress(95, 'inspect');
+    try {
+      const { inspection, sheets } = await inspectRender(
+        { ffmpeg, clock },
+        {
+          episodePath,
+          composition: composition as unknown as import('@ag-studio/render').Composition,
+          outDir: join(workDir, 'inspect'),
+          hasAudio: episodeProbe?.has_audio ?? true,
+          videoSeconds: episodeProbe?.video_seconds ?? null,
+          audioSeconds: episodeProbe?.audio_seconds ?? null,
+          timeoutSeconds: ffmpegTimeoutMs / 1000,
+          signal: ctx.signal,
+        },
+      );
+      for (const sheet of sheets) await ctx.upload(sheet, basename(sheet), 'image/jpeg');
+      await ctx.uploadJson(RENDER_INSPECT_PATH, inspection);
+      inspectEntry = { output: RENDER_INSPECT_PATH, sheets: sheets.map((sheet) => basename(sheet)) };
+      log.info('Inspected the render', { issues: inspection.issues.length, sheets: sheets.length, seconds: inspection.inspect_seconds });
+    } catch (e) {
+      if (ctx.signal.aborted) throw e;
+      log.warn('Could not inspect the render', { error: String(e) });
+      inspectWarnings.push('inspect_failed');
+    }
+  }
+
   ctx.progress(96, 'upload_manifest');
 
   // 11. Build render manifest
@@ -518,6 +582,8 @@ async function handleStudioRender(
   const allWarnings = [
     ...(composition.warnings ?? []),
     ...(report.warnings ?? []),
+    ...(mismatch !== null ? [mismatch] : []),
+    ...inspectWarnings,
   ];
 
   const renderManifest = RenderManifestSchema.parse({
@@ -533,6 +599,7 @@ async function handleStudioRender(
     sources,
     warnings: allWarnings,
     thumbnails: thumbnailManifestEntries,
+    ...(inspectEntry !== undefined ? { inspect: inspectEntry } : {}),
   });
 
   await ctx.uploadJson(RENDER_MANIFEST_PATH, renderManifest);

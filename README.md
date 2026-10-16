@@ -2,7 +2,7 @@
 
 Worker dựng video cho AG Studio, chạy trên máy cấu hình cao.
 
-Nhận job từ [ag-farm](../ag-farm) và xử lý sáu loại việc:
+Nhận job từ [ag-farm](../ag-farm) và xử lý bảy loại việc:
 - `studio.tts` — tổng hợp giọng nói (OmniVoice TTS)
 - `studio.transcribe` — nhận dạng lời nói trong footage (WhisperX), cho kiểu dựng cắt theo shot
 - `studio.export_premiere` — xuất project Adobe Premiere
@@ -12,6 +12,8 @@ Nhận job từ [ag-farm](../ag-farm) và xử lý sáu loại việc:
 - `studio.reference_fetch` — tải video YouTube mẫu (≤ 480p, ≤ 30 phút, ≤ 300 MB) cho Studio đo kiểu dựng khi YouTube
   chặn máy chủ Studio; yt-dlp chạy đúng cờ của Studio (không cookie, không đăng nhập), file đẩy lên rồi xoá ngay trên
   máy. Chỉ máy có yt-dlp nhận loại này.
+- `studio.beats` — nhịp của nhạc nền (librosa: từng phách, đầu ô nhịp, BPM; mỗi bài của nhạc ghép phân tích riêng) để
+  Studio cắt cảnh đúng phách (`engines/python/beats.py`). Chạy CPU, nhận trên máy khai `python` như `studio.tts`.
 
 ---
 
@@ -34,8 +36,8 @@ nhiêu lần cũng được):
   (`HF_HOME` của worker). requirements và bản torch không đổi thì bỏ qua pip (dấu `venv\ag-setup.stamp`);
 - log ở `C:\ag-farm\logs\setup.log`, kết quả ở `C:\ag-farm\logs\setup-result.json`.
 
-Máy không có GPU NVIDIA vẫn dựng video (`studio.render_*`, `studio.export_premiere`), không nhận `studio.tts` và
-`studio.transcribe`.
+Máy không có GPU NVIDIA vẫn dựng video (`studio.render_*`, `studio.export_premiere`), không nhận `studio.tts`,
+`studio.transcribe` và `studio.beats`.
 
 Sau mỗi lần cài/cập nhật, `C:\ag-farm\render\config.yaml` được ghi lại: giữ `name`, `token`, `hub_url`, `cache`,
 `schedule` và mọi khoá anh tự thêm (kể cả trong `extra`); viết lại các khoá installer quản lý trong `extra`
@@ -72,6 +74,45 @@ node scripts/release.mjs --publish --upload https://api-farm.ant-group.net
 Script đóng gói rồi đẩy zip lên hub (`POST /v1/admin/releases`); hub kiểm sha256, lưu gói và `latest.json`, các máy tự
 cập nhật trong khoảng 15 phút. Hub khác dùng biến khác: `--key-env FARM_DEV_RELEASE_KEY`. Không còn chép tay lên VPS
 bằng scp; `--publish <thư mục>` vẫn chép vào một thư mục latest.json nếu cần.
+
+Gói có font OFL cho chữ trên video (`fonts/`, danh sách `fonts/fonts.json`): `release.mjs` tự tải file còn thiếu từ
+google/fonts (Noto Sans JP/KR: notofonts/noto-cjk) và kiểm sha256. File font không nằm trong git. Thêm hoặc đổi bản một
+font: sửa `fonts.json` (để `sha256: null`), chạy `node scripts/fetch-fonts.mjs --pin` một lần rồi commit `fonts.json`.
+Font phải là bản tĩnh, hoặc bản biến thiên mà kiểu mặc định là Regular: libass chỉ đọc tên họ (name ID 1) của kiểu mặc
+định, nên `NotoSansJP[wght].ttf` của google/fonts (mặc định Thin, họ "Noto Sans JP Thin") không bao giờ được chọn và chữ
+Nhật rơi về font hệ thống (Linux không có thì ra ô vuông). Kiểm bằng `ffmpeg -v trace … -vf ass=…:fontsdir=…`: dòng
+`fontselect: (Noto Sans JP, 700, 0) -> NotoSansJP-Bold` là đúng.
+
+### Kiểm các máy sau mỗi lần phát hành
+
+Studio chỉ gửi một bản render cho máy khai đủ **mức render** (`engines.studio_render`, `RENDER_FEATURE_LEVEL` của
+`@ag-studio/render`): máy chưa lên bản mới không nhận job mới, job nằm chờ trong hàng tới
+`STUDIO_FARM_QUEUE_TIMEOUT_MINUTES`. Nên khoảng 20 phút sau khi phát hành, kiểm mọi máy đang bật:
+
+1. Web farm, trang **Máy**: cột phiên bản của mọi máy online là bản vừa phát hành (máy cũ có nhãn "cần cập nhật"; bấm
+   "Cập nhật ngay" hoặc chạy lại lệnh cài, bỏ `-Code`, trên máy đó).
+2. Mức render và loại job từng máy, qua API admin của hub. Lấy token: mở web farm (đã đăng nhập admin) → DevTools →
+   Console, chạy
+   `Object.keys(localStorage).filter((k) => k.startsWith('@@auth0spajs@@')).map((k) => JSON.parse(localStorage[k]).body?.access_token).find(Boolean)`
+   và chép chuỗi in ra. Rồi trong PowerShell:
+
+```powershell
+$token = '<chuỗi vừa chép>'
+$r = Invoke-RestMethod -Uri 'https://api-farm.ant-group.net/v1/admin/nodes?status=active&pageSize=200' -Headers @{ Authorization = "Bearer $token" }
+$r.items | Select-Object name, online, agent_version, @{ n = 'studio_render'; e = { $_.engines.studio_render } }, @{ n = 'python'; e = { [bool]$_.engines.python } }, @{ n = 'kinds'; e = { $_.kinds -join ',' } } | Format-Table -AutoSize
+```
+
+   Máy online nào có `agent_version` cũ hoặc `studio_render` thấp hơn mức của bản vừa phát hành thì chưa nhận bản render
+   mới. Bản mới mà `studio_render` vẫn thấp hơn mức của bản: worker tự kiểm thấy thiếu font (`fonts/` của gói); máy có
+   GPU mà `python` false hoặc không có `studio.tts`/`studio.transcribe` trong `kinds`: thiếu engine Python hoặc
+   Python không import được torch. Cả hai trường hợp xem dòng `[self-check]` đầu `C:\ag-farm\render\logs\worker.log`
+   của máy đó, rồi cài lại bản mới nhất.
+3. Bản xem trước nhẹ (tier `preview`, tối đa 6 Mbit/s, từ 0.9.1): một bản xem trước 10 phút nặng quá ~450 MB là máy render
+   nó còn bản cũ.
+
+Worker tự kiểm khi khởi động (`src/self-check.ts`): thiếu `engines/python/tts.py`, `transcribe.py`, `beats.py` hay
+`engine_io.py` thì log lỗi và không khai Python (hub không giao `studio.tts`/`studio.transcribe`/`studio.beats`); thiếu font đóng kèm thì log lỗi và khai
+mức render ngay dưới mức font; thiếu Arial thì log lỗi.
 
 ### Loại job máy nhận
 

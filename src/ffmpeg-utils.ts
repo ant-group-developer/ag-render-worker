@@ -40,7 +40,11 @@ export function resolveFfprobe(): string {
 // ---- Probe media ----
 
 export interface MediaProbeResult {
+  /** The video stream's length, else the container's. */
   duration_seconds: number;
+  /** Each stream's own length; `null` when the stream is missing or does not say. */
+  video_seconds: number | null;
+  audio_seconds: number | null;
   width: number;
   height: number;
   fps: number | null;
@@ -100,8 +104,15 @@ export async function probeMedia(
     if (den > 0) fps = Math.round((num / den) * 100) / 100;
   }
 
+  const streamSeconds = (s: { duration?: string } | undefined): number | null => {
+    const n = s?.duration !== undefined ? parseFloat(s.duration) : NaN;
+    return Number.isFinite(n) ? n : null;
+  };
+
   return {
     duration_seconds: duration,
+    video_seconds: streamSeconds(videoStream),
+    audio_seconds: streamSeconds(audioStream),
     width,
     height,
     fps,
