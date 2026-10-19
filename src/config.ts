@@ -53,6 +53,8 @@ export interface RenderWorkerExtra {
    * 10–45% CPU lúc render). Máy thiếu RAM (mỗi luồng giải mã 4K cần khoảng 1,5 GB) thì hạ xuống.
    */
   mezz_concurrency?: number;
+  /** Số file nguồn tải cùng lúc trong một job render, 1–6. Mặc định: 2. Đoạn nào có file rồi thì dựng ngay. */
+  download_concurrency?: number;
   /** Thiết bị cho nhận dạng lời nói: 'auto' (như tts_device), 'cuda', 'cuda:1', 'cpu'. Mặc định: 'auto'. */
   transcribe_device?: string;
   /** compute_type của faster-whisper. Mặc định: float16 trên GPU, int8 trên CPU. */
@@ -94,6 +96,7 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
         ? extra['mezz_cache_gb']
         : undefined,
     mezz_concurrency: intIn(extra['mezz_concurrency'], 1, 8),
+    download_concurrency: intIn(extra['download_concurrency'], 1, 6),
     transcribe_device: typeof extra['transcribe_device'] === 'string' ? extra['transcribe_device'] : undefined,
     transcribe_compute_type:
       typeof extra['transcribe_compute_type'] === 'string' ? extra['transcribe_compute_type'] : undefined,

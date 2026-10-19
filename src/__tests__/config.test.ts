@@ -23,6 +23,11 @@ describe('render worker config', () => {
     for (const bad of [0, 9, 2.5, '3', null]) expect(getExtra({ mezz_concurrency: bad }).mezz_concurrency).toBeUndefined();
   });
 
+  test('reads how many source files a render downloads at once, 1 to 6', () => {
+    expect(getExtra({ download_concurrency: 1 }).download_concurrency).toBe(1);
+    for (const bad of [0, 7, 1.5, '2']) expect(getExtra({ download_concurrency: bad }).download_concurrency).toBeUndefined();
+  });
+
   test('reads the paths the installer writes', () => {
     expect(
       getExtra({ ytdlp_bin: 'C:\\ag-farm\\venv\\Scripts\\yt-dlp.exe', hf_home: 'C:\\ag-farm\\models' }),

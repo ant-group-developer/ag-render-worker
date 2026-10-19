@@ -813,6 +813,117 @@ describe('asset out clamp', () => {
   );
 });
 
+// ---- Downloads alongside the render ----
+
+describe('sources download while the render runs', () => {
+  test(
+    'at most download_concurrency files at once, first used first, and the first clip is built before the last file is down',
+    async () => {
+      try { await execFileAsync(FFMPEG, ['-version'], { timeout: 5000 }); } catch { return; }
+      const dir = join(tmpdir(), `render-overlap-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      const clips = ['c1', 'c2', 'c3'];
+      // three different files (same length, same content would be one mezzanine under one cache key)
+      for (const [k, c] of clips.entries()) await createLavfiVideo(join(dir, `${c}.mp4`), 2 + k, 320, 180);
+      const wavPath = join(dir, 'L001.wav');
+      writeFileSync(wavPath, buildSilentWav(6));
+
+      const sign = new FakeSignClient();
+      const store = new FakeUploadStore();
+      for (const c of clips) sign.register(`asset:${c}`, join(dir, `${c}.mp4`));
+      sign.register('stage:tts/L001.wav', wavPath);
+      // the timeline uses c2 first, then c1, then c3
+      const order = ['c2', 'c1', 'c3'];
+      const comp = {
+        ...buildAssetComposition('asset:c2', 6, wavPath, { width: 320, height: 180 }),
+        segments: order.map((c, k) => ({
+          order: k, source_id: `src_01ABCDEFGHJKMNPQRSTVWXY${k}Z${k}`, source_path: `asset:${c}`, in: 0, out: 2, start: 2 * k, end: 2 * k + 2,
+          fit: 'scale_pad', has_audio: true, transition_out: { kind: 'cut', seconds: 0, tail_available: false },
+        })),
+        narration: [{ line_id: 'L001', wav: 'stage:tts/L001.wav', start: 0, end: 6 }],
+      };
+      const workDir = join(dir, 'work');
+      mkdirSync(workDir, { recursive: true });
+      writeFileSync(join(workDir, 'composition.json'), JSON.stringify(comp), 'utf8');
+      sign.register('stage:composition.json', join(workDir, 'composition.json'));
+
+      const events: string[] = [];
+      let running = 0;
+      let maxRunning = 0;
+      const plainDownload = store.makeDownload(sign);
+      const download = async (inputName: string, dest: string) => {
+        if (!inputName.startsWith('asset:')) return plainDownload(inputName, dest);
+        running++;
+        maxRunning = Math.max(maxRunning, running);
+        events.push(`start:${inputName}`);
+        // the last file the timeline needs is slow to come
+        await new Promise((r) => setTimeout(r, inputName === 'asset:c3' ? 3000 : 100));
+        await plainDownload(inputName, dest);
+        running--;
+        events.push(`done:${inputName}`);
+      };
+      const payload = { production_id: 'prod-overlap', revision: 1, composition: 'stage:composition.json', canvas: { width: 320, height: 180 }, output: 'renders/1/preview.mp4' };
+      const ctx = {
+        job: { id: 'job-overlap', type: 'studio.render_preview', attempt: 1, ticket: 't', lease_token: 'l', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: (_pct: number, stage: string) => {
+          if (stage === 'render_mezzanine' && !events.includes('mezzanine')) events.push('mezzanine');
+        },
+        download, upload: store.makeUpload(), uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      const result = await makeStudioRenderPreviewHandler({ encoder: 'cpu', download_concurrency: 2, mezz_concurrency: 2, mezz_cache_dir: join(dir, 'mezz') })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      expect(maxRunning).toBe(2);
+      expect(events.filter((e) => e.startsWith('start:'))).toEqual(['start:asset:c2', 'start:asset:c1', 'start:asset:c3']);
+      expect(events.indexOf('mezzanine')).toBeGreaterThan(-1);
+      expect(events.indexOf('mezzanine')).toBeLessThan(events.indexOf('done:asset:c3'));
+      expect(result.summary).toMatchObject({ download_concurrency: 2, mezz_concurrency: 2, mezz_rendered: 3 });
+      expect(result.summary['t_source_wait_s']).toBeGreaterThan(1);
+      const video = store.uploaded.get('renders/1/preview.mp4');
+      expect(Math.abs((await probeVideo(video!.localPath)).duration - 6)).toBeLessThan(0.2);
+    },
+    120_000,
+  );
+
+  test(
+    'a source that fails to download fails the job with that error',
+    async () => {
+      try { await execFileAsync(FFMPEG, ['-version'], { timeout: 5000 }); } catch { return; }
+      const dir = join(tmpdir(), `render-dlfail-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      await createLavfiVideo(join(dir, 'a.mp4'), 3, 320, 180);
+      const wavPath = join(dir, 'L001.wav');
+      writeFileSync(wavPath, buildSilentWav(3));
+      const sign = new FakeSignClient();
+      const store = new FakeUploadStore();
+      sign.register('asset:a', join(dir, 'a.mp4'));
+      sign.register('stage:tts/L001.wav', wavPath);
+      const workDir = join(dir, 'work');
+      mkdirSync(workDir, { recursive: true });
+      writeFileSync(join(workDir, 'composition.json'), JSON.stringify(buildAssetComposition('asset:a', 3, wavPath, { width: 320, height: 180 })), 'utf8');
+      sign.register('stage:composition.json', join(workDir, 'composition.json'));
+      const plainDownload = store.makeDownload(sign);
+      const payload = { production_id: 'prod-dlfail', revision: 1, composition: 'stage:composition.json', canvas: { width: 320, height: 180 }, output: 'renders/1/preview.mp4' };
+      const ctx = {
+        job: { id: 'job-dlfail', type: 'studio.render_preview', attempt: 1, ticket: 't', lease_token: 'l', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: async (name: string, dest: string) => { if (name.startsWith('asset:')) throw new Error('fetch failed'); return plainDownload(name, dest); },
+        upload: store.makeUpload(), uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await expect(makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext)).rejects.toThrow('fetch failed');
+      expect(store.uploaded.size).toBe(0);
+    },
+    60_000,
+  );
+});
+
 describe('durationMismatch', () => {
   test('names the stream furthest from total_seconds once it is more than 0.5 s off', async () => {
     const { durationMismatch } = await import('../render-handler.js');
