@@ -62,6 +62,32 @@ heartbeat; trang **Máy** của farm hiện các số này và biểu đồ 1 gi
 `metrics: false` trong `config.yaml`. Hub farm phải lên bản có số đo trước (hub cũ từ chối thì worker tự thôi gửi số đo
 trong một giờ, vẫn nhận việc bình thường).
 
+### Tốc độ render
+
+Một job `studio.render_preview`/`studio.render_final` tải file nguồn **2 file một lúc** (`extra.download_concurrency`,
+1–6), theo thứ tự đoạn đầu tiên dùng tới. Nó dựng mezzanine **3 đoạn một lúc** (`extra.mezz_concurrency`, 1–8), và
+đoạn nào có file rồi thì dựng ngay, không đợi tải hết. Máy farm đo được 10–45% CPU khi chỉ dựng một đoạn một lúc, và
+một luồng tải đã gần kịch cổng 1 Gbit, nên lợi chính là phần tải chạy chồng lên phần dựng. Mỗi luồng dựng giải mã một
+file 4K, cần khoảng 1,5 GB RAM: máy chật RAM (chạy chung ag-scan-worker) thì hạ `mezz_concurrency`.
+
+Kết quả job (chi tiết job trên farm, `summary`) ghi thời gian từng bước, đơn vị giây:
+
+| Khoá | Bước |
+|---|---|
+| `t_sign_s`, `t_download_s` | ký link; tải file nguồn và input nhỏ (lời dẫn, nhạc, logo) |
+| `t_mezz_s`, `t_source_wait_s` | dựng mezzanine; trong đó, tổng thời gian các luồng dựng đứng chờ file còn đang tải |
+| `t_even_s`, `t_loudnorm_s` | đo độ to từng đoạn (cân âm); đo loudnorm |
+| `t_final_encode_s` | lượt ghép và encode cuối |
+| `t_upload_s`, `t_thumbnails_s`, `t_inspect_s`, `t_total_s` | upload video; thumbnail; tự kiểm; cả job |
+
+Cùng chỗ đó có thêm:
+- `encoder`: encoder thật đã dùng, `nvenc` hoặc `cpu`;
+- `source_gb`: tổng dung lượng file nguồn, tải về hoặc lấy từ cache;
+- `mezz_rendered`, `mezz_cached`: số đoạn phải dựng và số đoạn lấy lại từ cache;
+- `mezz_concurrency`, `download_concurrency`: cấu hình job đã chạy.
+
+`t_source_wait_s` lớn nghĩa là tải chậm hơn dựng; `t_final_encode_s` lớn nghĩa là chỗ nghẽn nằm ở lượt ghép cuối.
+
 ### Phát hành bản mới (máy build Windows)
 
 Tăng `version` trong `package.json` (hub từ chối bản không mới hơn bản đang phát hành), build `@ag-studio/render`, rồi:

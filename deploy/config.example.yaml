@@ -42,5 +42,9 @@ extra:
   ollama_url: http://localhost:11434
   # auto = NVENC nếu có, không thì CPU
   encoder: auto
+  # Render: số mezzanine dựng cùng lúc (1–8, mặc định 3; mỗi luồng giải mã 4K cần ~1,5 GB RAM) và số file nguồn tải
+  # cùng lúc (1–6, mặc định 2). Xem README, mục "Tốc độ render".
+  # mezz_concurrency: 3
+  # download_concurrency: 2
   # Thư mục chứa arial.ttf (mặc định C:\Windows\Fonts)
   # fonts_dir: 'C:\Windows\Fonts'
