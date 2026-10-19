@@ -437,6 +437,34 @@ describe('premiereXml: trimmed clips', () => {
   });
 });
 
+describe('premiereXml: clip scale (Basic Motion)', () => {
+  const scaleOf = (xml: string, id: string) =>
+    new RegExp(`<clipitem id="${id}">[\\s\\S]*?<name>Basic Motion</name>[\\s\\S]*?<parameterid>scale</parameterid>[\\s\\S]*?<value>([\\d.]+)</value>[\\s\\S]*?</clipitem>`).exec(xml)?.[1];
+
+  test('a file the size of the sequence has no Basic Motion', () => {
+    expect(premiereXml(makeSeq())).not.toContain('Basic Motion');
+  });
+
+  test('a 1080p proxy fills a 4K sequence at 200%', () => {
+    const xml = premiereXml(makeSeq({ width: 3840, height: 2160 }));
+    expect(() => parse(xml)).not.toThrow();
+    expect(scaleOf(xml, 'clipitem-v1')).toBe('200');
+  });
+
+  test('a 4K original fits a 1080p sequence at 50%', () => {
+    const xml = premiereXml(makeSeq({ clips: [{ file: makeFile({ width: 3840, height: 2160 }), startFrame: 0 }] }));
+    expect(scaleOf(xml, 'clipitem-v1')).toBe('50');
+  });
+
+  test('a portrait file: pad keeps it whole, crop covers the frame', () => {
+    const file = makeFile({ width: 1080, height: 1920 });
+    const pad = premiereXml(makeSeq({ clips: [{ file, startFrame: 0 }] }));
+    const crop = premiereXml(makeSeq({ clips: [{ file, startFrame: 0, fit: 'scale_crop' }] }));
+    expect(scaleOf(pad, 'clipitem-v1')).toBe('56.25');
+    expect(scaleOf(crop, 'clipitem-v1')).toBe('177.77778');
+  });
+});
+
 describe('premiereXml: transitions', () => {
   const f1 = makeFile({ key: 'a', name: 'a.mp4', path: 'media/a.mp4', durationFrames: 250 });
   const f2 = makeFile({ key: 'b', name: 'b.mp4', path: 'media/b.mp4', durationFrames: 250 });

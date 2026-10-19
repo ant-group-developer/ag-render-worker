@@ -290,6 +290,7 @@ async function handleExportPremiere(
       inFrame: p.inFrame,
       outFrame: p.outFrame,
       transitionOut: adjacent ? p.transitionOut : null,
+      fit: p.seg.fit,
       // a clip muted on its own (Studio cut 1.1.0): the render plays none of its sound, so A1 has nothing under it
       ...(!p.seg.has_audio ? { muted: true } : {}),
     };
