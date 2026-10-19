@@ -415,6 +415,12 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
       const result = await handler(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
 
       expect(result.manifest).toBe('render.json');
+      // the job result says how long each step took (farm shows the summary in the job's detail)
+      expect(result.summary).toMatchObject({ encoder: 'cpu', mezz_rendered: 1, mezz_cached: 0 });
+      const keys = ['t_sign_s', 't_download_s', 't_mezz_s', 't_source_wait_s', 't_loudnorm_s', 't_final_encode_s', 't_upload_s', 't_inspect_s', 't_total_s'];
+      expect(keys.filter((key) => typeof result.summary[key] !== 'number')).toEqual([]);
+      expect(result.summary['t_total_s']).toBeGreaterThan(0);
+      expect(result.summary['source_gb']).toEqual(expect.any(Number));
 
       const renderManifest = store.jsonUploads.get('render.json');
       expect(renderManifest).toBeTruthy();

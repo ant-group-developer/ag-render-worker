@@ -155,6 +155,32 @@ export function buildThumbnailFfmpegArgs(opts: {
   ];
 }
 
+// ---- Thời gian từng bước ----
+
+/** Số giây (3 chữ số lẻ) từ `startMs` tới giờ. */
+function secondsSince(startMs: number): number {
+  return Math.round(Date.now() - startMs) / 1000;
+}
+
+/**
+ * Thời gian từng bước của một job render và vài con số đi kèm, ghi phẳng vào `summary` của kết quả job (farm hiện
+ * trong chi tiết job): `t_<bước>_s` là số giây thật của bước đó; `t_source_wait_s` là lúc các luồng dựng mezzanine
+ * đứng chờ file nguồn còn đang tải. Bước không chạy (preview không có thumbnail, job không tự kiểm) là 0.
+ */
+export interface RenderJobTimings {
+  t_sign_s: number;
+  t_download_s: number;
+  t_mezz_s: number;
+  t_source_wait_s: number;
+  t_even_s: number;
+  t_loudnorm_s: number;
+  t_final_encode_s: number;
+  t_upload_s: number;
+  t_thumbnails_s: number;
+  t_inspect_s: number;
+  t_total_s: number;
+}
+
 // ---- Handler chính ----
 
 type RenderKind = 'render_preview' | 'render_final';
@@ -176,6 +202,13 @@ async function handleStudioRender(
 
   const log = ctx.log.child({ handler: `studio.${kind}`, production_id: payload.production_id });
   log.info(`Starting studio.${kind}`, { revision: payload.revision });
+  const jobStarted = Date.now();
+  const t: RenderJobTimings = {
+    t_sign_s: 0, t_download_s: 0, t_mezz_s: 0, t_source_wait_s: 0, t_even_s: 0, t_loudnorm_s: 0, t_final_encode_s: 0,
+    t_upload_s: 0, t_thumbnails_s: 0, t_inspect_s: 0, t_total_s: 0,
+  };
+  /** Byte của các file nguồn job này dựng từ (tải về hoặc lấy từ cache của SDK). */
+  let sourceBytes = 0;
 
   const workDir = ctx.workDir;
   const ffmpeg = resolveFfmpeg();
@@ -237,12 +270,15 @@ async function handleStudioRender(
   if (assetInputs.length > 0) {
     // Gộp sign để lấy metadata tất cả assets cùng lúc
     const signOps = assetInputs.map((name) => ({ op: 'get' as const, input: name }));
+    const signStarted = Date.now();
     const signResults: SignResult[] = await ctx.sign.sign(signOps);
+    t.t_sign_s = secondsSince(signStarted);
 
     const assetsDir = join(workDir, 'assets');
     mkdirSync(assetsDir, { recursive: true });
 
     // Download từng distinct asset (không trùng lặp)
+    const downloadStarted = Date.now();
     const downloadedByInput = new Map<string, string>();
     for (let i = 0; i < assetInputs.length; i++) {
       const inputName = assetInputs[i]!;
@@ -269,6 +305,7 @@ async function handleStudioRender(
 
       downloadedByInput.set(inputName, localPath);
       inputToLocal.set(inputName, localPath);
+      sourceBytes += statSync(localPath).size;
       if (cacheKey) inputIdentity.set(inputName, `cache_key:${cacheKey}`);
 
       ctx.progress(
@@ -305,11 +342,13 @@ async function handleStudioRender(
         (seg as typeof seg & { out: number }).out = Math.max(seg.in, probedDur);
       }
     }
+    t.t_download_s = secondsSince(downloadStarted);
   }
 
   ctx.progress(50, 'download_inputs');
 
   // 5. Download các input khác (stage:, library:)
+  const otherStarted = Date.now();
   for (let i = 0; i < otherInputs.length; i++) {
     const name = otherInputs[i]!;
     if (name.startsWith('stage:') || name.startsWith('library:')) {
@@ -327,6 +366,7 @@ async function handleStudioRender(
     }
     ctx.progress(50 + Math.round(10 * ((i + 1) / Math.max(1, otherInputs.length))), 'download_inputs');
   }
+  t.t_download_s += secondsSince(otherStarted);
 
   ctx.progress(62, 'rewrite_composition');
 
@@ -424,7 +464,12 @@ async function handleStudioRender(
   ctx.progress(65, 'render');
   log.info('Calling renderComposition', { canvas: `${payload.canvas.width}x${payload.canvas.height}` });
 
-  const { report, episodePath } = await renderComposition(renderDeps, renderInput);
+  const { report, episodePath, timings } = await renderComposition(renderDeps, renderInput);
+  t.t_mezz_s = timings.mezz_s;
+  t.t_source_wait_s = timings.source_wait_s;
+  t.t_even_s = timings.even_s;
+  t.t_loudnorm_s = timings.loudnorm_s;
+  t.t_final_encode_s = timings.final_encode_s;
 
   ctx.progress(90, 'upload_video');
 
@@ -432,7 +477,9 @@ async function handleStudioRender(
   const outputRelPath = payload.output;
   const videoStats = statSync(episodePath);
 
+  const uploadStarted = Date.now();
   await ctx.upload(episodePath, outputRelPath, 'video/mp4');
+  t.t_upload_s = secondsSince(uploadStarted);
 
   // 9. Probe video kết quả để lấy dims/duration
   let finalWidth = payload.canvas.width;
@@ -466,6 +513,7 @@ async function handleStudioRender(
 
   if (!isPreview && payload.thumbnails.length > 0) {
     ctx.progress(91, 'render_thumbnails');
+    const thumbnailsStarted = Date.now();
 
     // Xác định kích thước đích: landscape/square → 1280×720, portrait → 720×1280
     const isPortrait = payload.canvas.height > payload.canvas.width;
@@ -535,6 +583,7 @@ async function handleStudioRender(
 
       ctx.progress(91 + Math.round(4 * (n / payload.thumbnails.length)), 'render_thumbnails');
     }
+    t.t_thumbnails_s = secondsSince(thumbnailsStarted);
   }
 
   // 10b. Tự kiểm (payload.inspect): đứng hình, màn đen, im lặng, độ to từng đoạn, tờ ghép khung hình. Lỗi của lượt kiểm
@@ -543,6 +592,7 @@ async function handleStudioRender(
   const inspectWarnings: string[] = [];
   if (payload.inspect) {
     ctx.progress(95, 'inspect');
+    const inspectStarted = Date.now();
     try {
       const { inspection, sheets } = await inspectRender(
         { ffmpeg, clock },
@@ -566,6 +616,7 @@ async function handleStudioRender(
       log.warn('Could not inspect the render', { error: String(e) });
       inspectWarnings.push('inspect_failed');
     }
+    t.t_inspect_s = secondsSince(inspectStarted);
   }
 
   ctx.progress(96, 'upload_manifest');
@@ -603,13 +654,22 @@ async function handleStudioRender(
   });
 
   await ctx.uploadJson(RENDER_MANIFEST_PATH, renderManifest);
+  t.t_total_s = secondsSince(jobStarted);
 
+  const stats = {
+    ...t,
+    encoder: report.encoder,
+    source_gb: Math.round(sourceBytes / 1e7) / 100,
+    mezz_rendered: report.segments.rendered,
+    mezz_cached: report.segments.cached,
+  };
   log.info(`studio.${kind} done`, {
     width: finalWidth,
     height: finalHeight,
     duration_s: finalDuration,
     size_bytes: videoStats.size,
     thumbnails: thumbnailManifestEntries.length,
+    ...stats,
   });
 
   return {
@@ -620,6 +680,7 @@ async function handleStudioRender(
       duration_s: finalDuration,
       size_bytes: videoStats.size,
       watermarked: anyWatermarked,
+      ...stats,
     },
   };
 }
