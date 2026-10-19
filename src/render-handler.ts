@@ -65,6 +65,8 @@ export function durationMismatch(expected: number, streams: { video_seconds: num
 
 const GB = 1024 * 1024 * 1024;
 const DEFAULT_MEZZ_CACHE_GB = 20;
+/** Mezzanine dựng cùng lúc khi config không khai `mezz_concurrency`. */
+export const DEFAULT_MEZZ_CONCURRENCY = 3;
 
 /**
  * Thư mục cache mezzanine dùng chung giữa các job khi config có `mezz_cache_dir` (main.ts đặt mặc định
@@ -457,6 +459,7 @@ async function handleStudioRender(
     tier: isPreview ? 'preview' : 'final',
     timeoutSeconds: ffmpegTimeoutMs / 1000,
     sourceChecksums,
+    mezzConcurrency: extra.mezz_concurrency ?? DEFAULT_MEZZ_CONCURRENCY,
     signal: ctx.signal,
     onProgress: (percent, stage) => ctx.progress(65 + Math.round(percent * 0.24), `render_${stage}`),
   };
@@ -662,6 +665,7 @@ async function handleStudioRender(
     source_gb: Math.round(sourceBytes / 1e7) / 100,
     mezz_rendered: report.segments.rendered,
     mezz_cached: report.segments.cached,
+    mezz_concurrency: renderInput.mezzConcurrency ?? 1,
   };
   log.info(`studio.${kind} done`, {
     width: finalWidth,

@@ -48,12 +48,22 @@ export interface RenderWorkerExtra {
   mezz_cache_dir?: string;
   /** Trần dung lượng cache mezzanine (GB). Mặc định: 20. */
   mezz_cache_gb?: number;
+  /**
+   * Số mezzanine dựng cùng lúc trong một job render, 1–8. Mặc định: 3 (một ffmpeg chỉ dùng vài nhân: máy farm đo được
+   * 10–45% CPU lúc render). Máy thiếu RAM (mỗi luồng giải mã 4K cần khoảng 1,5 GB) thì hạ xuống.
+   */
+  mezz_concurrency?: number;
   /** Thiết bị cho nhận dạng lời nói: 'auto' (như tts_device), 'cuda', 'cuda:1', 'cpu'. Mặc định: 'auto'. */
   transcribe_device?: string;
   /** compute_type của faster-whisper. Mặc định: float16 trên GPU, int8 trên CPU. */
   transcribe_compute_type?: string;
   /** batch_size của WhisperX. Mặc định: 8 (hạ xuống 4 nếu thiếu VRAM). */
   transcribe_batch_size?: number;
+}
+
+/** Một số nguyên trong [min, max]; giá trị khác (thiếu, sai kiểu, ngoài khoảng) là `undefined`, tức dùng mặc định. */
+function intIn(v: unknown, min: number, max: number): number | undefined {
+  return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : undefined;
 }
 
 export function getExtra(extra: Record<string, unknown> | undefined): RenderWorkerExtra {
@@ -83,6 +93,7 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
       typeof extra['mezz_cache_gb'] === 'number' && extra['mezz_cache_gb'] > 0
         ? extra['mezz_cache_gb']
         : undefined,
+    mezz_concurrency: intIn(extra['mezz_concurrency'], 1, 8),
     transcribe_device: typeof extra['transcribe_device'] === 'string' ? extra['transcribe_device'] : undefined,
     transcribe_compute_type:
       typeof extra['transcribe_compute_type'] === 'string' ? extra['transcribe_compute_type'] : undefined,

@@ -18,6 +18,11 @@ describe('render worker config', () => {
     expect(getExtra({ transcribe_batch_size: 0 }).transcribe_batch_size).toBeUndefined();
   });
 
+  test('reads how many mezzanines a render encodes at once, 1 to 8', () => {
+    expect(getExtra({ mezz_concurrency: 4 }).mezz_concurrency).toBe(4);
+    for (const bad of [0, 9, 2.5, '3', null]) expect(getExtra({ mezz_concurrency: bad }).mezz_concurrency).toBeUndefined();
+  });
+
   test('reads the paths the installer writes', () => {
     expect(
       getExtra({ ytdlp_bin: 'C:\\ag-farm\\venv\\Scripts\\yt-dlp.exe', hf_home: 'C:\\ag-farm\\models' }),
