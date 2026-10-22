@@ -293,8 +293,11 @@ async function handleStudioRender(
     }
   }
 
-  /** Một asset đã nằm trên đĩa: độ dài probe được (null nếu probe hỏng) và danh tính gộp vào khoá cache mezzanine. */
-  type AssetReady = { path: string; duration: number | null; checksum: string };
+  /**
+   * Một asset đã nằm trên đĩa: độ dài probe được (null nếu probe hỏng), có luồng tiếng hay không (null nếu probe hỏng)
+   * và danh tính gộp vào khoá cache mezzanine.
+   */
+  type AssetReady = { path: string; duration: number | null; hasAudio: boolean | null; checksum: string };
   const downloadConcurrency = extra.download_concurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY;
   const assetsByFirstUse = [...new Set(
     [...composition.segments].sort((a, b) => a.order - b.order).map((seg) => seg.source_path).filter((p) => assetInputs.includes(p)),
@@ -328,8 +331,11 @@ async function handleStudioRender(
     }
     sourceBytes += statSync(localPath).size;
     let duration: number | null = null;
+    let hasAudio: boolean | null = null;
     try {
-      duration = (await probeMedia(localPath, ffprobe)).duration_seconds;
+      const probed = await probeMedia(localPath, ffprobe);
+      duration = probed.duration_seconds;
+      hasAudio = probed.has_audio;
     } catch (e) {
       log.warn('Failed to probe asset, skipping clamp', { input: name, error: String(e) });
     }
@@ -338,7 +344,7 @@ async function handleStudioRender(
      * khi file đổi) hoặc sha256 của file. Không dùng đường dẫn cục bộ: nó khác nhau ở mỗi job.
      */
     const checksum = cacheKey ? `cache_key:${cacheKey}` : `sha256:${await sha256File(localPath)}`;
-    return { path: localPath, duration, checksum };
+    return { path: localPath, duration, hasAudio, checksum };
   };
   const downloadStarted = Date.now();
   const downloadLane = async (): Promise<void> => {
@@ -393,11 +399,14 @@ async function handleStudioRender(
   const otherChecksums = new Map<string, Promise<string>>();
   const CLAMP_TOLERANCE_S = 0.5;
   const clampWarned = new Set<string>();
+  /** Đoạn mà composition đòi tiếng nhưng file nguồn không có luồng tiếng: dựng câm, lượt tự kiểm cũng coi là câm. */
+  const silentOrders = new Set<number>();
   /**
    * Nguồn của một đoạn, chờ tới khi file của nó tải xong. `out` bị cắt về độ dài probe được khi file ngắn hơn timeline
-   * (cảnh báo khi lệch quá 0,5 s): đoạn đó giữ khung cuối, file ra vẫn dài đúng composition.
+   * (cảnh báo khi lệch quá 0,5 s): đoạn đó giữ khung cuối, file ra vẫn dài đúng composition. File không có luồng tiếng
+   * thì `has_audio: false`: map `[0:a]` của nó làm hỏng cả mezzanine ("matches no streams"), nên đoạn đó dựng câm.
    */
-  const sourceFor = async (seg: { order: number; source_path: string; in: number; out: number }) => {
+  const sourceFor = async (seg: { order: number; source_path: string; in: number; out: number; has_audio: boolean }) => {
     const input = inputByOrder.get(seg.order) ?? seg.source_path;
     const ready = assetReady.get(input);
     if (ready === undefined) {
@@ -418,7 +427,11 @@ async function handleStudioRender(
       }
       out = Math.max(seg.in, asset.duration);
     }
-    return { path: asset.path, checksum: asset.checksum, out };
+    if (asset.hasAudio === false && seg.has_audio && !silentOrders.has(seg.order)) {
+      silentOrders.add(seg.order);
+      log.warn(`Asset ${input} has no audio stream; segment ${seg.order} is rendered silent`);
+    }
+    return { path: asset.path, checksum: asset.checksum, out, ...(asset.hasAudio === false ? { has_audio: false } : {}) };
   };
 
   const clock = { now: () => new Date().toISOString() };
@@ -645,7 +658,10 @@ async function handleStudioRender(
         { ffmpeg, clock },
         {
           episodePath,
-          composition: composition as unknown as import('@ag-studio/render').Composition,
+          composition: {
+            ...composition,
+            segments: composition.segments.map((s) => (silentOrders.has(s.order) ? { ...s, has_audio: false } : s)),
+          } as unknown as import('@ag-studio/render').Composition,
           outDir: join(workDir, 'inspect'),
           hasAudio: episodeProbe?.has_audio ?? true,
           videoSeconds: episodeProbe?.video_seconds ?? null,

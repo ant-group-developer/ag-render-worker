@@ -813,6 +813,92 @@ describe('asset out clamp', () => {
   );
 });
 
+describe('asset without an audio stream', () => {
+  test(
+    'a video-only asset marked has_audio renders silent instead of failing its mezzanine, and the render is still inspected',
+    async () => {
+      try { await execFileAsync(FFMPEG, ['-version'], { timeout: 5000 }); } catch {
+        console.log('ffmpeg not available, skipping');
+        return;
+      }
+
+      const dir = join(tmpdir(), `render-mute-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      const vid = join(dir, 'flycam.mp4');
+      await execFileAsync(FFMPEG, ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=25:duration=3', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an', '-y', vid], { timeout: 30_000 });
+
+      const sign = new FakeSignClient();
+      const store = new FakeUploadStore();
+      sign.register('asset:asset-mute', vid);
+      const comp = {
+        schema_version: 'harness.composition/v1',
+        output: { width: 320, height: 180, fps: 25, codec: 'h264' },
+        voice: 'original',
+        language: 'vi',
+        total_seconds: 3,
+        request_id: 'req_01ABCDEFGHJKMNPQRSTVWXYZ12',
+        brand: null,
+        segments: [
+          {
+            order: 0, source_id: 'src_01ABCDEFGHJKMNPQRSTVWXYZ12', source_path: 'asset:asset-mute', in: 0, out: 3, start: 0, end: 3,
+            fit: 'scale_pad', has_audio: true, transition_out: { kind: 'cut', seconds: 0, tail_available: false },
+          },
+        ],
+        text_events: [],
+        captions: { mode: 'none', cues: [] },
+        music: null,
+        logo: null,
+        narration: [],
+        transitions: { requested: 0, applied: 0, downgraded: [] },
+        warnings: [],
+      };
+      const workDir = join(dir, 'work');
+      mkdirSync(workDir, { recursive: true });
+      const compPath = join(workDir, 'composition.json');
+      writeFileSync(compPath, JSON.stringify(comp), 'utf8');
+      sign.register('stage:composition.json', compPath);
+
+      const warnMessages: string[] = [];
+      const payload = {
+        production_id: 'prod-mute', revision: 1, composition: 'stage:composition.json', canvas: { width: 320, height: 180 },
+        output: 'renders/mute/preview.mp4', inspect: true,
+      };
+      const ctx = {
+        job: { id: 'job-mute', type: 'studio.render_preview', attempt: 1, ticket: 't', lease_token: 'l', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload,
+        workDir,
+        sign,
+        cache: null,
+        log: {
+          info: () => {},
+          warn: (msg: string) => { warnMessages.push(msg); },
+          error: () => {},
+          debug: () => {},
+          child: function() { return this; },
+        },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: store.makeDownload(sign),
+        upload: store.makeUpload(),
+        uploadJson: store.makeUploadJson(),
+      };
+
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await makeStudioRenderPreviewHandler({})(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      expect(warnMessages.some((w) => w.includes('has no audio stream'))).toBe(true);
+      const video = store.uploaded.get('renders/mute/preview.mp4');
+      expect(video).toBeTruthy();
+      const { probeMedia } = await import('../ffmpeg-utils.js');
+      const probe = await probeMedia(video!.localPath, FFPROBE);
+      expect(probe.has_audio).toBe(true);
+      expect(Math.abs((probe.audio_seconds ?? 0) - 3)).toBeLessThanOrEqual(0.1);
+      expect(store.jsonUploads.get('inspect.json')).toBeTruthy();
+    },
+    120_000,
+  );
+});
+
 // ---- Downloads alongside the render ----
 
 describe('sources download while the render runs', () => {
