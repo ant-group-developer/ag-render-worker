@@ -504,6 +504,89 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
   );
 
   test(
+    'the render is inspected while it uploads, and the manifest goes up once both are done',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      sign.register('asset:asset-001', sourceVideoPath);
+      sign.register('stage:tts/L001.wav', narrationWavPath);
+      const workDir = join(testDir, `run-inspect-upload-${randomUUID()}`);
+      mkdirSync(workDir, { recursive: true });
+      const compositionPath = join(workDir, 'composition.json');
+      writeFileSync(compositionPath, JSON.stringify(buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS)), 'utf8');
+      sign.register('stage:renders/1/composition.json', compositionPath);
+      const payload = {
+        production_id: 'prod-test', revision: 1, composition: 'stage:renders/1/composition.json',
+        canvas: CANVAS, output: 'renders/1/preview.mp4', inspect: true,
+      };
+      const events: string[] = [];
+      const ctx = {
+        job: { id: 'job-inspect-upload', type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: store.makeDownload(sign),
+        // the video's upload only ends once inspect.json is up: an inspection waiting for the upload would never come
+        upload: async (localPath: string, outputPath: string, contentType: string) => {
+          if (contentType === 'video/mp4') {
+            events.push('video:start');
+            const started = Date.now();
+            while (!events.includes('inspect.json') && Date.now() - started < 30_000) await new Promise((r) => setTimeout(r, 20));
+            events.push('video:end');
+          }
+          store.uploaded.set(outputPath, { localPath, contentType });
+        },
+        uploadJson: async (outputPath: string, data: unknown) => {
+          events.push(outputPath);
+          store.jsonUploads.set(outputPath, data);
+        },
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      expect(events).toEqual(['video:start', 'inspect.json', 'video:end', 'render.json']);
+    },
+    120_000,
+  );
+
+  test(
+    'a video upload that fails fails the job, after the inspection, with no manifest',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      sign.register('asset:asset-001', sourceVideoPath);
+      sign.register('stage:tts/L001.wav', narrationWavPath);
+      const workDir = join(testDir, `run-upload-fail-${randomUUID()}`);
+      mkdirSync(workDir, { recursive: true });
+      const compositionPath = join(workDir, 'composition.json');
+      writeFileSync(compositionPath, JSON.stringify(buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS)), 'utf8');
+      sign.register('stage:renders/1/composition.json', compositionPath);
+      const payload = {
+        production_id: 'prod-test', revision: 1, composition: 'stage:renders/1/composition.json',
+        canvas: CANVAS, output: 'renders/fail/preview.mp4', inspect: true,
+      };
+      const json: string[] = [];
+      const ctx = {
+        job: { id: 'job-upload-fail', type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: store.makeDownload(sign),
+        upload: async (_localPath: string, _outputPath: string, contentType: string) => {
+          if (contentType === 'video/mp4') throw new Error('Part 3 PUT failed: HTTP 503');
+        },
+        uploadJson: async (outputPath: string) => {
+          json.push(outputPath);
+        },
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await expect(makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext)).rejects.toThrow('HTTP 503');
+      expect(json).toEqual(['inspect.json']);
+    },
+    120_000,
+  );
+
+  test(
     'a second job reuses the mezzanines of the first from the shared mezz cache',
     async () => {
       if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;

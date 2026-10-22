@@ -540,9 +540,13 @@ async function handleStudioRender(
   const outputRelPath = payload.output;
   const videoStats = statSync(episodePath);
 
+  // Bản 4K cỡ 9 GB tải lên mất hơn 10 phút: probe, thumbnail và tự kiểm (đều chỉ đọc file trên máy) chạy trong lúc đó.
+  // Upload hỏng giữa chừng thì báo lỗi sau khi các bước kia xong; trước đó không để thành rejection không ai bắt.
   const uploadStarted = Date.now();
-  await ctx.upload(episodePath, outputRelPath, 'video/mp4');
-  t.t_upload_s = secondsSince(uploadStarted);
+  const uploading = ctx.upload(episodePath, outputRelPath, 'video/mp4').then(() => {
+    t.t_upload_s = secondsSince(uploadStarted);
+  });
+  uploading.catch(() => {});
 
   // 9. Probe video kết quả để lấy dims/duration
   let finalWidth = payload.canvas.width;
@@ -684,6 +688,9 @@ async function handleStudioRender(
     }
     t.t_inspect_s = secondsSince(inspectStarted);
   }
+
+  ctx.progress(95, 'upload_video');
+  await uploading;
 
   ctx.progress(96, 'upload_manifest');
 
