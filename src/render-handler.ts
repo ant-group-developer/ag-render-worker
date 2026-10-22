@@ -534,17 +534,33 @@ async function handleStudioRender(
   t.t_loudnorm_s = timings.loudnorm_s;
   t.t_final_encode_s = timings.final_encode_s;
 
-  ctx.progress(90, 'upload_video');
-
   // 8. Upload video output
   const outputRelPath = payload.output;
   const videoStats = statSync(episodePath);
 
+  // Từ 90% đến 99% chạy theo số byte đã tải lên (thanh đứng yên ở 95% suốt mấy phút upload bị tưởng là treo và bị bấm
+  // dừng); tên bước là upload khi còn đang tải, là bước kiểm đang chạy khi đã tải xong.
+  let uploadedShare = 0;
+  let uploadDone = false;
+  let checkStage: string | null = null;
+  const reportTail = (): void => ctx.progress(90 + Math.floor(9 * uploadedShare), !uploadDone || checkStage === null ? 'upload_video' : checkStage);
+  reportTail();
+
   // Bản 4K cỡ 9 GB tải lên mất hơn 10 phút: probe, thumbnail và tự kiểm (đều chỉ đọc file trên máy) chạy trong lúc đó.
   // Upload hỏng giữa chừng thì báo lỗi sau khi các bước kia xong; trước đó không để thành rejection không ai bắt.
   const uploadStarted = Date.now();
-  const uploading = ctx.upload(episodePath, outputRelPath, 'video/mp4').then(() => {
+  const uploading = ctx.upload(episodePath, outputRelPath, 'video/mp4', {
+    onProgress: (done, total) => {
+      const share = total > 0 ? Math.min(1, done / total) : 1;
+      const moved = Math.floor(9 * share) !== Math.floor(9 * uploadedShare);
+      uploadedShare = share;
+      if (moved) reportTail();
+    },
+  }).then(() => {
     t.t_upload_s = secondsSince(uploadStarted);
+    uploadedShare = 1;
+    uploadDone = true;
+    reportTail();
   });
   uploading.catch(() => {});
 
@@ -579,7 +595,8 @@ async function handleStudioRender(
   }> = [];
 
   if (!isPreview && payload.thumbnails.length > 0) {
-    ctx.progress(91, 'render_thumbnails');
+    checkStage = 'render_thumbnails';
+    reportTail();
     const thumbnailsStarted = Date.now();
 
     // Xác định kích thước đích: landscape/square → 1280×720, portrait → 720×1280
@@ -647,8 +664,6 @@ async function handleStudioRender(
         width: thumbW,
         height: thumbH,
       });
-
-      ctx.progress(91 + Math.round(4 * (n / payload.thumbnails.length)), 'render_thumbnails');
     }
     t.t_thumbnails_s = secondsSince(thumbnailsStarted);
   }
@@ -658,7 +673,8 @@ async function handleStudioRender(
   let inspectEntry: { output: string; sheets: string[] } | undefined;
   const inspectWarnings: string[] = [];
   if (payload.inspect) {
-    ctx.progress(95, 'inspect');
+    checkStage = 'inspect';
+    reportTail();
     const inspectStarted = Date.now();
     try {
       const { inspection, sheets } = await inspectRender(
@@ -689,10 +705,11 @@ async function handleStudioRender(
     t.t_inspect_s = secondsSince(inspectStarted);
   }
 
-  ctx.progress(95, 'upload_video');
+  checkStage = null;
+  reportTail();
   await uploading;
 
-  ctx.progress(96, 'upload_manifest');
+  ctx.progress(99, 'upload_manifest');
 
   // 11. Build render manifest
   const anyWatermarked = [...sourceMetas.values()].some((m) => m.watermarked);

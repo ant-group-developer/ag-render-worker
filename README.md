@@ -77,7 +77,8 @@ khoảng 45 fps trên máy 20 luồng. Mỗi đoạn dùng một phiên NVENC. F
 cần trống thêm chừng ấy ổ đĩa. Video ngắn, hoặc video toàn dissolve, vẫn chạy một lượt.
 
 Bản render tải lên trong lúc worker probe, làm thumbnail và tự kiểm. Upload lỗi thì job vẫn báo lỗi, sau khi các bước
-kia chạy xong.
+kia chạy xong. Từ 90% đến 99%, tiến độ của job chạy theo số byte đã tải lên (bước `upload_video`); tải xong mà bước kiểm
+còn chạy thì tên bước là `render_thumbnails` hoặc `inspect`.
 
 Kết quả job (chi tiết job trên farm, `summary`) ghi thời gian từng bước, đơn vị giây:
 

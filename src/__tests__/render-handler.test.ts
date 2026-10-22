@@ -550,6 +550,57 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
   );
 
   test(
+    'from 90% the progress follows the bytes uploaded, and never goes back',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      sign.register('asset:asset-001', sourceVideoPath);
+      sign.register('stage:tts/L001.wav', narrationWavPath);
+      const workDir = join(testDir, `run-upload-progress-${randomUUID()}`);
+      mkdirSync(workDir, { recursive: true });
+      const compositionPath = join(workDir, 'composition.json');
+      writeFileSync(compositionPath, JSON.stringify(buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS)), 'utf8');
+      sign.register('stage:renders/1/composition.json', compositionPath);
+      const payload = {
+        production_id: 'prod-test', revision: 1, composition: 'stage:renders/1/composition.json',
+        canvas: CANVAS, output: 'renders/1/preview.mp4', inspect: true,
+      };
+      const seen: [number, string][] = [];
+      const ctx = {
+        job: { id: 'job-upload-progress', type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: (percent: number, stage: string) => { seen.push([percent, stage]); },
+        download: store.makeDownload(sign),
+        // ten parts, the last one only once the inspection is up
+        upload: async (localPath: string, outputPath: string, contentType: string, opts?: { onProgress?: (done: number, total: number) => void }) => {
+          if (contentType === 'video/mp4') {
+            for (let part = 1; part <= 10; part++) {
+              if (part === 10) while (!store.jsonUploads.has('inspect.json')) await new Promise((r) => setTimeout(r, 20));
+              opts?.onProgress?.(part * 100, 1000);
+              await new Promise((r) => setTimeout(r, 5));
+            }
+          }
+          store.uploaded.set(outputPath, { localPath, contentType });
+        },
+        uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      const tail = seen.filter(([p]) => p >= 90);
+      expect(tail[0]).toEqual([90, 'upload_video']);
+      expect(tail.every(([p], i) => i === 0 || p >= tail[i - 1]![0])).toBe(true);
+      // the bar moves while the file goes up: 90, then more steps, 99 when the last part is in
+      const uploading = tail.filter(([, s]) => s === 'upload_video').map(([p]) => p);
+      expect(new Set(uploading).size).toBeGreaterThanOrEqual(8);
+      expect(uploading).toContain(99);
+      expect(tail[tail.length - 1]).toEqual([99, 'upload_manifest']);
+    },
+    120_000,
+  );
+
+  test(
     'a video upload that fails fails the job, after the inspection, with no manifest',
     async () => {
       if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
