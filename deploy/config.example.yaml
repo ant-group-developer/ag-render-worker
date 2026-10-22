@@ -46,5 +46,7 @@ extra:
   # cùng lúc (1–6, mặc định 2). Xem README, mục "Tốc độ render".
   # mezz_concurrency: 3
   # download_concurrency: 2
+  # Lượt ghép cuối cắt hình thành bấy nhiêu đoạn chạy cùng lúc (1–4, mặc định 3; mỗi đoạn một phiên NVENC; 1 = một lượt).
+  # final_slices: 3
   # Thư mục chứa arial.ttf (mặc định C:\Windows\Fonts)
   # fonts_dir: 'C:\Windows\Fonts'

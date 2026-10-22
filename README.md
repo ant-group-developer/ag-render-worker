@@ -70,6 +70,15 @@ Một job `studio.render_preview`/`studio.render_final` tải file nguồn **2 f
 một luồng tải đã gần kịch cổng 1 Gbit, nên lợi chính là phần tải chạy chồng lên phần dựng. Mỗi luồng dựng giải mã một
 file 4K, cần khoảng 1,5 GB RAM: máy chật RAM (chạy chung ag-scan-worker) thì hạ `mezz_concurrency`.
 
+Lượt ghép cuối cắt hình thành **3 đoạn** (`extra.final_slices`, 1–4), chỉ cắt ở chỗ chuyển cảnh cut hoặc dip_black
+(không cắt giữa dissolve), mỗi đoạn dài ít nhất 30 giây. Mỗi đoạn chạy một ffmpeg riêng, cùng lúc với một ffmpeg làm
+tiếng, rồi nối lại không encode lại. ffmpeg 6.1 giải mã và lọc một lượt trên một luồng: một lượt cho bản cuối 4K chỉ đạt
+khoảng 45 fps trên máy 20 luồng. Mỗi đoạn dùng một phiên NVENC. File tạm của các đoạn lớn bằng chính video, nên lúc nối
+cần trống thêm chừng ấy ổ đĩa. Video ngắn, hoặc video toàn dissolve, vẫn chạy một lượt.
+
+Bản render tải lên trong lúc worker probe, làm thumbnail và tự kiểm. Upload lỗi thì job vẫn báo lỗi, sau khi các bước
+kia chạy xong.
+
 Kết quả job (chi tiết job trên farm, `summary`) ghi thời gian từng bước, đơn vị giây:
 
 | Khoá | Bước |
@@ -84,7 +93,10 @@ Cùng chỗ đó có thêm:
 - `encoder`: encoder thật đã dùng, `nvenc` hoặc `cpu`;
 - `source_gb`: tổng dung lượng file nguồn, tải về hoặc lấy từ cache;
 - `mezz_rendered`, `mezz_cached`: số đoạn phải dựng và số đoạn lấy lại từ cache;
-- `mezz_concurrency`, `download_concurrency`: cấu hình job đã chạy.
+- `mezz_concurrency`, `download_concurrency`: cấu hình job đã chạy;
+- `final_slices`: số đoạn lượt ghép cuối thật sự đã cắt (1 = một lượt).
+
+`t_upload_s` chạy chồng lên `t_thumbnails_s` và `t_inspect_s`, nên tổng các bước có thể lớn hơn `t_total_s`.
 
 `t_source_wait_s` lớn nghĩa là tải chậm hơn dựng; `t_final_encode_s` lớn nghĩa là chỗ nghẽn nằm ở lượt ghép cuối.
 
