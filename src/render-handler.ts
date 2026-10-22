@@ -72,6 +72,8 @@ export const DEFAULT_MEZZ_CONCURRENCY = 3;
  * luồng tải: luồng thứ hai chủ yếu để file sau không phải đợi file trước xong mới bắt đầu.
  */
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 2;
+/** Số đoạn của lượt ghép cuối khi config không khai `final_slices`. */
+export const DEFAULT_FINAL_SLICES = 3;
 
 /**
  * Thư mục cache mezzanine dùng chung giữa các job khi config có `mezz_cache_dir` (main.ts đặt mặc định
@@ -506,6 +508,7 @@ async function handleStudioRender(
     sourceChecksums: new Map(),
     sourceFor,
     mezzConcurrency: extra.mezz_concurrency ?? DEFAULT_MEZZ_CONCURRENCY,
+    finalSlices: extra.final_slices ?? DEFAULT_FINAL_SLICES,
     signal: ctx.signal,
     onProgress: (percent, stage) => {
       renderPercent = percent;
@@ -727,6 +730,7 @@ async function handleStudioRender(
     mezz_cached: report.segments.cached,
     mezz_concurrency: renderInput.mezzConcurrency ?? 1,
     download_concurrency: downloadConcurrency,
+    final_slices: timings.final_slices,
   };
   log.info(`studio.${kind} done`, {
     width: finalWidth,

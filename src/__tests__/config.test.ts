@@ -28,6 +28,12 @@ describe('render worker config', () => {
     for (const bad of [0, 7, 1.5, '2']) expect(getExtra({ download_concurrency: bad }).download_concurrency).toBeUndefined();
   });
 
+  test('reads into how many slices the final pass cuts its picture, 1 to 4', () => {
+    expect(getExtra({ final_slices: 1 }).final_slices).toBe(1);
+    expect(getExtra({ final_slices: 4 }).final_slices).toBe(4);
+    for (const bad of [0, 5, 2.5, '3']) expect(getExtra({ final_slices: bad }).final_slices).toBeUndefined();
+  });
+
   test('reads the paths the installer writes', () => {
     expect(
       getExtra({ ytdlp_bin: 'C:\\ag-farm\\venv\\Scripts\\yt-dlp.exe', hf_home: 'C:\\ag-farm\\models' }),
