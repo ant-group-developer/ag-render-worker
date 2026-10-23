@@ -28,10 +28,14 @@ describe('render worker config', () => {
     for (const bad of [0, 7, 1.5, '2']) expect(getExtra({ download_concurrency: bad }).download_concurrency).toBeUndefined();
   });
 
-  test('reads into how many slices the final pass cuts its picture, 1 to 4', () => {
-    expect(getExtra({ final_slices: 1 }).final_slices).toBe(1);
-    expect(getExtra({ final_slices: 4 }).final_slices).toBe(4);
-    for (const bad of [0, 5, 2.5, '3']) expect(getExtra({ final_slices: bad }).final_slices).toBeUndefined();
+  test('reads how the final pass is sliced: inputs a slice (0-64), slices at once (1-4), decoder threads (1-32)', () => {
+    expect(getExtra({ final_slice_inputs: 14 }).final_slice_inputs).toBe(14);
+    expect(getExtra({ final_slice_inputs: 0 }).final_slice_inputs).toBe(0);
+    for (const bad of [-1, 65, 2.5, '14']) expect(getExtra({ final_slice_inputs: bad }).final_slice_inputs).toBeUndefined();
+    expect(getExtra({ final_concurrency: 4 }).final_concurrency).toBe(4);
+    for (const bad of [0, 5, '3']) expect(getExtra({ final_concurrency: bad }).final_concurrency).toBeUndefined();
+    expect(getExtra({ decode_threads: 8 }).decode_threads).toBe(8);
+    for (const bad of [0, 33, 1.5]) expect(getExtra({ decode_threads: bad }).decode_threads).toBeUndefined();
   });
 
   test('reads the paths the installer writes', () => {

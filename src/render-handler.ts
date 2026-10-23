@@ -72,8 +72,14 @@ export const DEFAULT_MEZZ_CONCURRENCY = 3;
  * luồng tải: luồng thứ hai chủ yếu để file sau không phải đợi file trước xong mới bắt đầu.
  */
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 2;
-/** Số đoạn của lượt ghép cuối khi config không khai `final_slices`. */
-export const DEFAULT_FINAL_SLICES = 3;
+/**
+ * Lượt ghép cuối khi config không khai gì: đoạn chừng 14 clip, 3 đoạn cùng lúc, 8 luồng giải mã mỗi clip. Đo ở máy dev
+ * trên bản 127 clip 4K (giải mã 16 luồng như máy farm): ffmpeg 6.1 ghép 3 đoạn lớn cùng lúc thì hết bộ nhớ; 9 đoạn,
+ * 3 cùng lúc, 8 luồng xong trong 194 s với 15 GB (ffmpeg 9: 5 GB), một lượt ffmpeg 9 mất 345 s với 20 GB.
+ */
+export const DEFAULT_FINAL_SLICE_INPUTS = 14;
+export const DEFAULT_FINAL_CONCURRENCY = 3;
+export const DEFAULT_DECODE_THREADS = 8;
 
 /**
  * Thư mục cache mezzanine dùng chung giữa các job khi config có `mezz_cache_dir` (main.ts đặt mặc định
@@ -508,7 +514,9 @@ async function handleStudioRender(
     sourceChecksums: new Map(),
     sourceFor,
     mezzConcurrency: extra.mezz_concurrency ?? DEFAULT_MEZZ_CONCURRENCY,
-    finalSlices: extra.final_slices ?? DEFAULT_FINAL_SLICES,
+    finalSliceInputs: extra.final_slice_inputs ?? DEFAULT_FINAL_SLICE_INPUTS,
+    finalConcurrency: extra.final_concurrency ?? DEFAULT_FINAL_CONCURRENCY,
+    decodeThreads: extra.decode_threads ?? DEFAULT_DECODE_THREADS,
     signal: ctx.signal,
     onProgress: (percent, stage) => {
       renderPercent = percent;
@@ -755,6 +763,9 @@ async function handleStudioRender(
     mezz_concurrency: renderInput.mezzConcurrency ?? 1,
     download_concurrency: downloadConcurrency,
     final_slices: timings.final_slices,
+    final_slice_inputs: renderInput.finalSliceInputs ?? 0,
+    final_concurrency: renderInput.finalConcurrency ?? 1,
+    decode_threads: renderInput.decodeThreads ?? 0,
   };
   log.info(`studio.${kind} done`, {
     width: finalWidth,

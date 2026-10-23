@@ -56,11 +56,15 @@ export interface RenderWorkerExtra {
   /** Số file nguồn tải cùng lúc trong một job render, 1–6. Mặc định: 2. Đoạn nào có file rồi thì dựng ngay. */
   download_concurrency?: number;
   /**
-   * Lượt ghép cuối cắt hình thành tối đa bấy nhiêu đoạn, mỗi đoạn một ffmpeg chạy cùng lúc (cùng một ffmpeg làm tiếng),
-   * rồi nối lại không encode lại, 1–4. Mặc định: 3 (ffmpeg 6.1 giải mã và lọc một lượt trên một luồng: bản cuối 4K chỉ
-   * đạt ~45 fps trên máy 20 luồng). Mỗi đoạn một phiên NVENC; 1 = một lượt như trước.
+   * Lượt ghép cuối cắt hình thành từng đoạn chừng bấy nhiêu clip mezzanine (cả đuôi dissolve), 0–64; 0 = một lượt như
+   * trước. Mặc định: 14. Một lượt mở mọi clip cùng lúc, mỗi clip 4K giữ khung hình trong bộ giải mã: bản 137 clip ngốn
+   * ~30 GB trên máy 32 GB rồi phải dùng ổ đĩa thay RAM hoặc hết bộ nhớ.
    */
-  final_slices?: number;
+  final_slice_inputs?: number;
+  /** Số đoạn của lượt ghép cuối chạy cùng lúc, 1–4. Mặc định: 3 (mỗi đoạn một phiên NVENC). */
+  final_concurrency?: number;
+  /** Số luồng giải mã của mỗi clip trong lượt ghép cuối, 1–32. Mặc định: 8 (ffmpeg tự chọn tới 16 trên máy farm). */
+  decode_threads?: number;
   /** Thiết bị cho nhận dạng lời nói: 'auto' (như tts_device), 'cuda', 'cuda:1', 'cpu'. Mặc định: 'auto'. */
   transcribe_device?: string;
   /** compute_type của faster-whisper. Mặc định: float16 trên GPU, int8 trên CPU. */
@@ -103,7 +107,9 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
         : undefined,
     mezz_concurrency: intIn(extra['mezz_concurrency'], 1, 8),
     download_concurrency: intIn(extra['download_concurrency'], 1, 6),
-    final_slices: intIn(extra['final_slices'], 1, 4),
+    final_slice_inputs: intIn(extra['final_slice_inputs'], 0, 64),
+    final_concurrency: intIn(extra['final_concurrency'], 1, 4),
+    decode_threads: intIn(extra['decode_threads'], 1, 32),
     transcribe_device: typeof extra['transcribe_device'] === 'string' ? extra['transcribe_device'] : undefined,
     transcribe_compute_type:
       typeof extra['transcribe_compute_type'] === 'string' ? extra['transcribe_compute_type'] : undefined,
