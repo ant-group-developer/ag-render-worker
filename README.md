@@ -70,11 +70,17 @@ Một job `studio.render_preview`/`studio.render_final` tải file nguồn **2 f
 một luồng tải đã gần kịch cổng 1 Gbit, nên lợi chính là phần tải chạy chồng lên phần dựng. Mỗi luồng dựng giải mã một
 file 4K, cần khoảng 1,5 GB RAM: máy chật RAM (chạy chung ag-scan-worker) thì hạ `mezz_concurrency`.
 
-Lượt ghép cuối cắt hình thành **3 đoạn** (`extra.final_slices`, 1–4), chỉ cắt ở chỗ chuyển cảnh cut hoặc dip_black
-(không cắt giữa dissolve), mỗi đoạn dài ít nhất 30 giây. Mỗi đoạn chạy một ffmpeg riêng, cùng lúc với một ffmpeg làm
-tiếng, rồi nối lại không encode lại. ffmpeg 6.1 giải mã và lọc một lượt trên một luồng: một lượt cho bản cuối 4K chỉ đạt
-khoảng 45 fps trên máy 20 luồng. Mỗi đoạn dùng một phiên NVENC. File tạm của các đoạn lớn bằng chính video, nên lúc nối
-cần trống thêm chừng ấy ổ đĩa. Video ngắn, hoặc video toàn dissolve, vẫn chạy một lượt.
+Lượt ghép cuối cắt hình thành từng đoạn chừng **14 clip** mezzanine, tính cả đuôi dissolve (`extra.final_slice_inputs`,
+0–64; 0 là một lượt). Nó chỉ cắt ở chỗ chuyển cảnh cut hoặc dip_black, không cắt giữa dissolve, và mỗi đoạn dài ít nhất
+30 giây. Mỗi lúc chạy **3 đoạn** (`extra.final_concurrency`, 1–4), mỗi đoạn một ffmpeg và một phiên NVENC. Một ffmpeg làm
+tiếng chạy song song, rồi các đoạn được nối lại không encode lại. Mỗi clip giải mã bằng **8 luồng**
+(`extra.decode_threads`, 1–32).
+
+Lý do: ghép một lượt mở mọi clip cùng lúc, và mỗi bộ giải mã 4K giữ khung hình của từng luồng (ffmpeg tự chọn tới 16 luồng
+trên máy farm). Bản 137 clip ngốn khoảng 30 GB trên máy 32 GB, phải dùng ổ đĩa thay RAM hoặc chết vì hết bộ nhớ. Đo trên
+bản 127 clip 4K: ffmpeg 6.1 ghép 3 đoạn lớn cùng lúc thì hết bộ nhớ, còn 9 đoạn chạy 3 cùng lúc với 8 luồng xong trong
+194 s với 15 GB. File tạm của các đoạn lớn bằng chính video, nên lúc nối cần trống thêm chừng ấy ổ đĩa. Video ngắn hoặc
+toàn dissolve vẫn chạy một lượt.
 
 Bản render tải lên trong lúc worker probe, làm thumbnail và tự kiểm. Upload lỗi thì job vẫn báo lỗi, sau khi các bước
 kia chạy xong. Từ 90% đến 99%, tiến độ của job chạy theo số byte đã tải lên (bước `upload_video`); tải xong mà bước kiểm
@@ -95,7 +101,8 @@ Cùng chỗ đó có thêm:
 - `source_gb`: tổng dung lượng file nguồn, tải về hoặc lấy từ cache;
 - `mezz_rendered`, `mezz_cached`: số đoạn phải dựng và số đoạn lấy lại từ cache;
 - `mezz_concurrency`, `download_concurrency`: cấu hình job đã chạy;
-- `final_slices`: số đoạn lượt ghép cuối thật sự đã cắt (1 = một lượt).
+- `final_slices`: số đoạn lượt ghép cuối thật sự đã cắt (1 = một lượt);
+- `final_slice_inputs`, `final_concurrency`, `decode_threads`: cấu hình lượt ghép cuối job đã chạy.
 
 `t_upload_s` chạy chồng lên `t_thumbnails_s` và `t_inspect_s`, nên tổng các bước có thể lớn hơn `t_total_s`.
 

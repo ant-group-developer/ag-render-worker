@@ -46,7 +46,10 @@ extra:
   # cùng lúc (1–6, mặc định 2). Xem README, mục "Tốc độ render".
   # mezz_concurrency: 3
   # download_concurrency: 2
-  # Lượt ghép cuối cắt hình thành bấy nhiêu đoạn chạy cùng lúc (1–4, mặc định 3; mỗi đoạn một phiên NVENC; 1 = một lượt).
-  # final_slices: 3
+  # Lượt ghép cuối: đoạn chừng bấy nhiêu clip (0–64, mặc định 14; 0 = một lượt), số đoạn chạy cùng lúc (1–4, mặc định 3;
+  # mỗi đoạn một phiên NVENC) và số luồng giải mã mỗi clip (1–32, mặc định 8). Máy ít RAM thì hạ decode_threads xuống 4.
+  # final_slice_inputs: 14
+  # final_concurrency: 3
+  # decode_threads: 8
   # Thư mục chứa arial.ttf (mặc định C:\Windows\Fonts)
   # fonts_dir: 'C:\Windows\Fonts'
