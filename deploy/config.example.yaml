@@ -51,5 +51,7 @@ extra:
   # final_slice_inputs: 14
   # final_concurrency: 3
   # decode_threads: 8
+  # Thời gian cho cả một lần render (giây, 600–86400; mặc định 10800 cho bản cuối, 3600 cho bản xem trước)
+  # render_budget_s: 10800
   # Thư mục chứa arial.ttf (mặc định C:\Windows\Fonts)
   # fonts_dir: 'C:\Windows\Fonts'

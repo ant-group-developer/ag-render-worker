@@ -29,8 +29,13 @@ export interface RenderWorkerExtra {
   unload_ollama_before_tts?: boolean;
   /** URL Ollama. Mặc định: 'http://localhost:11434'. */
   ollama_url?: string;
-  /** Timeout (giây) cho mỗi lệnh ffmpeg. Mặc định: 3600. */
+  /** Timeout (giây) cho mỗi lệnh ffmpeg ngoài lần render (kiểm bản render, xuất Premiere). Mặc định: 3600. */
   ffmpeg_timeout_s?: number;
+  /**
+   * Thời gian (giây) cho cả một lần render, mọi lệnh ffmpeg của nó cộng lại, 600–86400. Mặc định: 10800 (3 giờ) cho bản
+   * cuối, 3600 cho bản xem trước. Đặt thì áp cho cả hai.
+   */
+  render_budget_s?: number;
   /** Thư mục chứa arial.ttf. Mặc định: thư mục font của hệ điều hành (xem fonts.ts). */
   fonts_dir?: string;
   /** Thư mục font OFL đóng kèm (có `fonts.json`). Mặc định: `fonts/` của gói (xem fonts.ts). */
@@ -93,6 +98,7 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
     ollama_url: typeof extra['ollama_url'] === 'string' ? extra['ollama_url'] : undefined,
     ffmpeg_timeout_s:
       typeof extra['ffmpeg_timeout_s'] === 'number' ? extra['ffmpeg_timeout_s'] : undefined,
+    render_budget_s: intIn(extra['render_budget_s'], 600, 86_400),
     fonts_dir: typeof extra['fonts_dir'] === 'string' ? extra['fonts_dir'] : undefined,
     bundled_fonts_dir: typeof extra['bundled_fonts_dir'] === 'string' ? extra['bundled_fonts_dir'] : undefined,
     tts_device: typeof extra['tts_device'] === 'string' ? extra['tts_device'] : undefined,

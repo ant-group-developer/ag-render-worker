@@ -76,6 +76,10 @@ Lượt ghép cuối cắt hình thành từng đoạn chừng **14 clip** mezza
 tiếng chạy song song, rồi các đoạn được nối lại không encode lại. Mỗi clip giải mã bằng **8 luồng**
 (`extra.decode_threads`, 1–32).
 
+Cả một lần render có **3 giờ** cho bản cuối và **1 giờ** cho bản xem trước (`extra.render_budget_s`, 600–86400 giây, đặt thì
+áp cho cả hai); `ffmpeg_timeout_s` chỉ còn cho các lệnh ngoài lần render. Một lần encode bằng NVENC hỏng thì chạy lại bằng
+CPU, trừ khi nó hỏng vì hết giờ hoặc chỉ còn dưới 5 phút: khi đó job báo lỗi "not retried on cpu" kèm lý do.
+
 Lý do: ghép một lượt mở mọi clip cùng lúc, và mỗi bộ giải mã 4K giữ khung hình của từng luồng (ffmpeg tự chọn tới 16 luồng
 trên máy farm). Bản 137 clip ngốn khoảng 30 GB trên máy 32 GB, phải dùng ổ đĩa thay RAM hoặc chết vì hết bộ nhớ. Đo trên
 bản 127 clip 4K: ffmpeg 6.1 ghép 3 đoạn lớn cùng lúc thì hết bộ nhớ, còn 9 đoạn chạy 3 cùng lúc với 8 luồng xong trong

@@ -80,6 +80,17 @@ export const DEFAULT_DOWNLOAD_CONCURRENCY = 2;
 export const DEFAULT_FINAL_SLICE_INPUTS = 14;
 export const DEFAULT_FINAL_CONCURRENCY = 3;
 export const DEFAULT_DECODE_THREADS = 8;
+/**
+ * Thời gian cho cả một lần render khi config không khai `render_budget_s`. Trước đây là `ffmpeg_timeout_s` (1 giờ) cho cả
+ * bản cuối: prod 20/10, các bản cuối 4K chết ở phút 60–62 ("final encode … timed out").
+ */
+export const DEFAULT_FINAL_BUDGET_S = 3 * 3600;
+export const DEFAULT_PREVIEW_BUDGET_S = 3600;
+
+/** Thời gian (giây) cho cả lần render của một job: `render_budget_s` nếu có, không thì mặc định theo loại render. */
+export function renderBudgetSeconds(kind: 'render_preview' | 'render_final', extra: Pick<RenderWorkerExtra, 'render_budget_s'>): number {
+  return extra.render_budget_s ?? (kind === 'render_preview' ? DEFAULT_PREVIEW_BUDGET_S : DEFAULT_FINAL_BUDGET_S);
+}
 
 /**
  * Thư mục cache mezzanine dùng chung giữa các job khi config có `mezz_cache_dir` (main.ts đặt mặc định
@@ -509,7 +520,7 @@ async function handleStudioRender(
     encoderCfg: extra.encoder ?? 'auto',
     // a preview is watched in a browser: same frame size, a much lighter encode (the mezzanines and their cache are shared)
     tier: isPreview ? 'preview' : 'final',
-    timeoutSeconds: ffmpegTimeoutMs / 1000,
+    timeoutSeconds: renderBudgetSeconds(kind, extra),
     // every segment's checksum comes from `sourceFor`, once its file is down
     sourceChecksums: new Map(),
     sourceFor,

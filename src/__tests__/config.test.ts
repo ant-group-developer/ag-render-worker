@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { ROLE_PACKAGES } from '@ag-farm/protocol';
 import { RELEASE_PACKAGE, capabilitiesOptionsFor, getExtra, resolveYtdlp } from '../config.js';
 import { resolveFfmpeg } from '../ffmpeg-utils.js';
+import { renderBudgetSeconds } from '../render-handler.js';
 import { RENDER_FEATURE_LEVEL } from '@ag-studio/render';
 
 const nothingExists = () => false;
@@ -36,6 +37,16 @@ describe('render worker config', () => {
     for (const bad of [0, 5, '3']) expect(getExtra({ final_concurrency: bad }).final_concurrency).toBeUndefined();
     expect(getExtra({ decode_threads: 8 }).decode_threads).toBe(8);
     for (const bad of [0, 33, 1.5]) expect(getExtra({ decode_threads: bad }).decode_threads).toBeUndefined();
+  });
+
+  test('a render has 3 hours for a final and 1 hour for a preview unless render_budget_s (600-86400 s) says otherwise', () => {
+    expect(renderBudgetSeconds('render_final', getExtra({}))).toBe(10_800);
+    expect(renderBudgetSeconds('render_preview', getExtra({}))).toBe(3_600);
+    expect(renderBudgetSeconds('render_final', getExtra({ render_budget_s: 14_400 }))).toBe(14_400);
+    expect(renderBudgetSeconds('render_preview', getExtra({ render_budget_s: 14_400 }))).toBe(14_400);
+    for (const bad of [599, 86_401, 1.5, '3600']) expect(getExtra({ render_budget_s: bad }).render_budget_s).toBeUndefined();
+    // ffmpeg_timeout_s no longer bounds a render
+    expect(renderBudgetSeconds('render_final', getExtra({ ffmpeg_timeout_s: 3600 }))).toBe(10_800);
   });
 
   test('reads the paths the installer writes', () => {
