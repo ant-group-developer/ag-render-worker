@@ -45,6 +45,9 @@ export interface PremiereClip {
   transitionOut?: PremiereTransition | null;
   /** This clip's own sound is off while others keep theirs (Studio cut 1.1.0, `has_audio: false`): no A1 item. */
   muted?: boolean;
+  /** How the render fits a file of another size to the frame (`scaleFilter` in @harness/core): whole inside it
+   * (`scale_pad`, the default) or covering it (`scale_crop`). Written as the clip's Basic Motion scale. */
+  fit?: "scale_pad" | "scale_crop";
 }
 
 /** Ducking of A2 under the narration: `gainDb` below the music level inside each window, ramps after its edges. */
@@ -156,6 +159,15 @@ export function premiereXml(seq: PremiereSequence): string {
     x.close("effect").close("filter");
   };
 
+  // Premiere places an imported clip at 100% whatever the sequence size: a file of another size gets its scale
+  // (percent) as Basic Motion, so a proxy fills a 1080p or a 4K sequence as the render fills the frame.
+  const basicMotion = (scale: number) => {
+    if (Math.abs(scale - 100) < 1e-3) return;
+    x.open("filter").open("effect").leaf("name", "Basic Motion").leaf("effectid", "basic").leaf("effectcategory", "motion").leaf("effecttype", "motion").leaf("mediatype", "video");
+    x.open("parameter").leaf("parameterid", "scale").leaf("name", "Scale").leaf("valuemin", 0).leaf("valuemax", 1000).leaf("value", round5(scale)).close("parameter");
+    x.close("effect").close("filter");
+  };
+
   const transitionitem = (t: PremiereTransition, cut: number) => {
     const { start, end } = transitionSpan(t, cut);
     const name = t.kind === "dissolve" ? "Cross Dissolve" : "Dip to Color Dissolve";
@@ -183,6 +195,7 @@ export function premiereXml(seq: PremiereSequence): string {
     if (into) transitionitem(into, c.startFrame);
     clipitem(`clipitem-v${i + 1}`, c.file.name, into ? -1 : c.startFrame, out ? -1 : endOf(c), inOf(c), outOf(c), c.file.durationFrames, () => {
       file(c.file);
+      basicMotion(clipScale(c, seq));
       if (withAudio) link([
         { id: `clipitem-v${i + 1}`, mediatype: "video", trackindex: 1, clipindex: i + 1 },
         { id: `clipitem-a${i + 1}`, mediatype: "audio", trackindex: 1, clipindex: audioIndex(seq, i) },
@@ -297,6 +310,14 @@ function audioIndex(seq: PremiereSequence, i: number): number {
 }
 
 function round5(n: number): number { return Math.round(n * 1e5) / 1e5; }
+
+/** The scale (percent) that fits a clip's file to the sequence frame as the render does; 100 when its size is unknown. */
+export function clipScale(c: PremiereClip, seq: { width: number; height: number }): number {
+  if (!(c.file.width > 0 && c.file.height > 0)) return 100;
+  const kw = seq.width / c.file.width;
+  const kh = seq.height / c.file.height;
+  return 100 * (c.fit === "scale_crop" ? Math.max(kw, kh) : Math.min(kw, kh));
+}
 
 /** `00:01:02,345` */
 function srtTime(seconds: number): string {

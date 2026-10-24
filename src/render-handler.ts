@@ -65,6 +65,32 @@ export function durationMismatch(expected: number, streams: { video_seconds: num
 
 const GB = 1024 * 1024 * 1024;
 const DEFAULT_MEZZ_CACHE_GB = 20;
+/** Mezzanine dựng cùng lúc khi config không khai `mezz_concurrency`. */
+export const DEFAULT_MEZZ_CONCURRENCY = 3;
+/**
+ * File nguồn tải cùng lúc khi config không khai `download_concurrency`. Máy farm đã chạy gần kịch cổng 1 Gbit với một
+ * luồng tải: luồng thứ hai chủ yếu để file sau không phải đợi file trước xong mới bắt đầu.
+ */
+export const DEFAULT_DOWNLOAD_CONCURRENCY = 2;
+/**
+ * Lượt ghép cuối khi config không khai gì: đoạn chừng 14 clip, 3 đoạn cùng lúc, 8 luồng giải mã mỗi clip. Đo ở máy dev
+ * trên bản 127 clip 4K (giải mã 16 luồng như máy farm): ffmpeg 6.1 ghép 3 đoạn lớn cùng lúc thì hết bộ nhớ; 9 đoạn,
+ * 3 cùng lúc, 8 luồng xong trong 194 s với 15 GB (ffmpeg 9: 5 GB), một lượt ffmpeg 9 mất 345 s với 20 GB.
+ */
+export const DEFAULT_FINAL_SLICE_INPUTS = 14;
+export const DEFAULT_FINAL_CONCURRENCY = 3;
+export const DEFAULT_DECODE_THREADS = 8;
+/**
+ * Thời gian cho cả một lần render khi config không khai `render_budget_s`. Trước đây là `ffmpeg_timeout_s` (1 giờ) cho cả
+ * bản cuối: prod 20/10, các bản cuối 4K chết ở phút 60–62 ("final encode … timed out").
+ */
+export const DEFAULT_FINAL_BUDGET_S = 3 * 3600;
+export const DEFAULT_PREVIEW_BUDGET_S = 3600;
+
+/** Thời gian (giây) cho cả lần render của một job: `render_budget_s` nếu có, không thì mặc định theo loại render. */
+export function renderBudgetSeconds(kind: 'render_preview' | 'render_final', extra: Pick<RenderWorkerExtra, 'render_budget_s'>): number {
+  return extra.render_budget_s ?? (kind === 'render_preview' ? DEFAULT_PREVIEW_BUDGET_S : DEFAULT_FINAL_BUDGET_S);
+}
 
 /**
  * Thư mục cache mezzanine dùng chung giữa các job khi config có `mezz_cache_dir` (main.ts đặt mặc định
@@ -155,6 +181,32 @@ export function buildThumbnailFfmpegArgs(opts: {
   ];
 }
 
+// ---- Thời gian từng bước ----
+
+/** Số giây (3 chữ số lẻ) từ `startMs` tới giờ. */
+function secondsSince(startMs: number): number {
+  return Math.round(Date.now() - startMs) / 1000;
+}
+
+/**
+ * Thời gian từng bước của một job render và vài con số đi kèm, ghi phẳng vào `summary` của kết quả job (farm hiện
+ * trong chi tiết job): `t_<bước>_s` là số giây thật của bước đó; `t_source_wait_s` là lúc các luồng dựng mezzanine
+ * đứng chờ file nguồn còn đang tải. Bước không chạy (preview không có thumbnail, job không tự kiểm) là 0.
+ */
+export interface RenderJobTimings {
+  t_sign_s: number;
+  t_download_s: number;
+  t_mezz_s: number;
+  t_source_wait_s: number;
+  t_even_s: number;
+  t_loudnorm_s: number;
+  t_final_encode_s: number;
+  t_upload_s: number;
+  t_thumbnails_s: number;
+  t_inspect_s: number;
+  t_total_s: number;
+}
+
 // ---- Handler chính ----
 
 type RenderKind = 'render_preview' | 'render_final';
@@ -176,6 +228,13 @@ async function handleStudioRender(
 
   const log = ctx.log.child({ handler: `studio.${kind}`, production_id: payload.production_id });
   log.info(`Starting studio.${kind}`, { revision: payload.revision });
+  const jobStarted = Date.now();
+  const t: RenderJobTimings = {
+    t_sign_s: 0, t_download_s: 0, t_mezz_s: 0, t_source_wait_s: 0, t_even_s: 0, t_loudnorm_s: 0, t_final_encode_s: 0,
+    t_upload_s: 0, t_thumbnails_s: 0, t_inspect_s: 0, t_total_s: 0,
+  };
+  /** Byte của các file nguồn job này dựng từ (tải về hoặc lấy từ cache của SDK). */
+  let sourceBytes = 0;
 
   const workDir = ctx.workDir;
   const ffmpeg = resolveFfmpeg();
@@ -217,11 +276,6 @@ async function handleStudioRender(
   }
 
   const inputToLocal = new Map<string, string>();
-  /**
-   * Nội dung của từng input, gộp vào khoá cache mezzanine: `cache_key` ag-go cấp (original:/proxy:/variant:
-   * theo id, đổi khi file đổi) hoặc sha256 của file. Không dùng đường dẫn cục bộ: nó khác nhau ở mỗi job.
-   */
-  const inputIdentity = new Map<string, string>();
   const sourceMetas = new Map<string, {
     source_kind: 'original' | 'proxy' | 'preview';
     watermarked: boolean;
@@ -229,87 +283,110 @@ async function handleStudioRender(
 
   ctx.progress(8, 'sign_assets');
 
-  // 4. Sign (metadata only) và download asset inputs.
+  // 4. Sign (metadata only) rồi tải asset inputs, song song và theo thứ tự đoạn đầu tiên dùng tới, trong lúc dựng.
   //
-  // Asset inputs là toàn bộ file video (Studio gửi in: 0, out: <duration từ analysis>).
-  // Mỗi asset được download một lần. Signing được gộp để lấy metadata (source_kind, watermarked,
-  // cache_key); download thực sự đi qua ctx.download (kế thừa caching + file:// compatibility của SDK).
+  // Asset inputs là toàn bộ file video (Studio gửi in: 0, out: <duration từ analysis>). Mỗi asset tải một lần qua
+  // ctx.download (cache + file:// của SDK). Đường dẫn cục bộ tính sẵn, nên composition được viết lại ngay; mỗi đoạn chờ
+  // đúng file của nó (`sourceFor`), nên đoạn đầu dựng trong khi các file sau còn đang tải.
+  const assetsDir = join(workDir, 'assets');
+  mkdirSync(assetsDir, { recursive: true });
+  const assetCacheKey = new Map<string, string | null>();
   if (assetInputs.length > 0) {
-    // Gộp sign để lấy metadata tất cả assets cùng lúc
     const signOps = assetInputs.map((name) => ({ op: 'get' as const, input: name }));
+    const signStarted = Date.now();
     const signResults: SignResult[] = await ctx.sign.sign(signOps);
-
-    const assetsDir = join(workDir, 'assets');
-    mkdirSync(assetsDir, { recursive: true });
-
-    // Download từng distinct asset (không trùng lặp)
-    const downloadedByInput = new Map<string, string>();
+    t.t_sign_s = secondsSince(signStarted);
     for (let i = 0; i < assetInputs.length; i++) {
       const inputName = assetInputs[i]!;
       const signResult = signResults[i];
       if (!signResult || signResult.op !== 'get') {
         throw new Error(`Unexpected sign result for ${inputName}`);
       }
-
-      const cacheKey = signResult.cache_key;
-
       sourceMetas.set(inputName, {
         source_kind: signResult.source?.source_kind ?? 'preview',
         watermarked: signResult.source?.watermarked ?? true,
       });
-
+      assetCacheKey.set(inputName, signResult.cache_key);
       // Đường dẫn cục bộ: dùng safeId cho file (không cache-keyed qua SDK)
-      const safeId = inputName.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const localPath = join(assetsDir, `${safeId}.mp4`);
-
-      if (!(await fileExists(localPath))) {
-        // ctx.download handles cache lookup, file:// in tests, and HTTP in production
-        await ctx.download(inputName, localPath, { useCacheKey: cacheKey });
-      }
-
-      downloadedByInput.set(inputName, localPath);
-      inputToLocal.set(inputName, localPath);
-      if (cacheKey) inputIdentity.set(inputName, `cache_key:${cacheKey}`);
-
-      ctx.progress(
-        8 + Math.round(37 * ((i + 1) / assetInputs.length)),
-        'download_assets',
-      );
-    }
-
-    // 4b. Probe mỗi file và clamp seg.out nếu cần
-    const probedDuration = new Map<string, number>();
-    for (const [inputName, localPath] of downloadedByInput) {
-      try {
-        const probe = await probeMedia(localPath, ffprobe);
-        probedDuration.set(inputName, probe.duration_seconds);
-      } catch (e) {
-        log.warn('Failed to probe asset, skipping clamp', { input: inputName, error: String(e) });
-      }
-    }
-
-    // Clamp seg.out cho từng clip dùng asset:
-    const CLAMP_TOLERANCE_S = 0.5;
-    for (const seg of composition.segments) {
-      if (!seg.source_path.startsWith('asset:')) continue;
-      const probedDur = probedDuration.get(seg.source_path);
-      if (probedDur === undefined) continue;
-      if (seg.out > probedDur) {
-        if (seg.out - probedDur > CLAMP_TOLERANCE_S) {
-          const warning = `Asset ${seg.source_path}: segment out=${seg.out.toFixed(3)}s exceeds probed duration ${probedDur.toFixed(3)}s by more than ${CLAMP_TOLERANCE_S}s; clamping.`;
-          log.warn(warning);
-          // Thêm vào warnings của composition (warnings array mutable sau khi parse)
-          if (!composition.warnings) (composition as Composition).warnings = [];
-          composition.warnings.push(warning);
-        }
-        (seg as typeof seg & { out: number }).out = Math.max(seg.in, probedDur);
-      }
+      inputToLocal.set(inputName, join(assetsDir, `${inputName.replace(/[^a-zA-Z0-9._-]/g, '_')}.mp4`));
     }
   }
 
-  ctx.progress(50, 'download_inputs');
+  /**
+   * Một asset đã nằm trên đĩa: độ dài probe được (null nếu probe hỏng), có luồng tiếng hay không (null nếu probe hỏng)
+   * và danh tính gộp vào khoá cache mezzanine.
+   */
+  type AssetReady = { path: string; duration: number | null; hasAudio: boolean | null; checksum: string };
+  const downloadConcurrency = extra.download_concurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY;
+  const assetsByFirstUse = [...new Set(
+    [...composition.segments].sort((a, b) => a.order - b.order).map((seg) => seg.source_path).filter((p) => assetInputs.includes(p)),
+  )];
+  for (const name of assetInputs) if (!assetsByFirstUse.includes(name)) assetsByFirstUse.push(name);
+  const assetReady = new Map<string, Promise<AssetReady>>();
+  const queue: { name: string; resolve: (r: AssetReady) => void; reject: (e: unknown) => void }[] = [];
+  for (const name of assetsByFirstUse) {
+    let resolve!: (r: AssetReady) => void;
+    let reject!: (e: unknown) => void;
+    const ready = new Promise<AssetReady>((res, rej) => { resolve = res; reject = rej; });
+    ready.catch(() => {}); // một lượt tải hỏng được báo qua đoạn chờ nó, không thành unhandled rejection
+    assetReady.set(name, ready);
+    queue.push({ name, resolve, reject });
+  }
+  let downloadsStopped = false;
+  let assetsDone = 0;
+  let renderPercent = 0;
+  let renderStage: string | null = null;
+  /** Một dải tiến độ cho cả tải lẫn dựng (chạy chồng lên nhau): 25% theo số asset đã tải, 75% theo phần dựng. */
+  const reportCombined = (): void => {
+    const dl = assetsByFirstUse.length > 0 ? assetsDone / assetsByFirstUse.length : 1;
+    ctx.progress(Math.round(8 + 81 * (0.25 * dl + 0.75 * (renderPercent / 100))), renderStage ?? 'download_assets');
+  };
+  const fetchAsset = async (name: string): Promise<AssetReady> => {
+    const localPath = inputToLocal.get(name)!;
+    const cacheKey = assetCacheKey.get(name) ?? null;
+    if (!(await fileExists(localPath))) {
+      // ctx.download handles cache lookup, file:// in tests, and HTTP in production
+      await ctx.download(name, localPath, { useCacheKey: cacheKey });
+    }
+    sourceBytes += statSync(localPath).size;
+    let duration: number | null = null;
+    let hasAudio: boolean | null = null;
+    try {
+      const probed = await probeMedia(localPath, ffprobe);
+      duration = probed.duration_seconds;
+      hasAudio = probed.has_audio;
+    } catch (e) {
+      log.warn('Failed to probe asset, skipping clamp', { input: name, error: String(e) });
+    }
+    /**
+     * Nội dung của input, gộp vào khoá cache mezzanine: `cache_key` ag-go cấp (original:/proxy:/variant: theo id, đổi
+     * khi file đổi) hoặc sha256 của file. Không dùng đường dẫn cục bộ: nó khác nhau ở mỗi job.
+     */
+    const checksum = cacheKey ? `cache_key:${cacheKey}` : `sha256:${await sha256File(localPath)}`;
+    return { path: localPath, duration, hasAudio, checksum };
+  };
+  const downloadStarted = Date.now();
+  const downloadLane = async (): Promise<void> => {
+    while (!downloadsStopped && queue.length > 0) {
+      const item = queue.shift()!;
+      try {
+        item.resolve(await fetchAsset(item.name));
+        assetsDone++;
+        reportCombined();
+      } catch (e) {
+        // không mở lượt tải mới; những đoạn chờ các file chưa tải cũng hỏng theo
+        downloadsStopped = true;
+        item.reject(e);
+        for (const rest of queue.splice(0)) rest.reject(e);
+        return;
+      }
+    }
+  };
+  void Promise.all(Array.from({ length: Math.min(downloadConcurrency, queue.length) }, downloadLane))
+    .then(() => { t.t_download_s = Math.round((t.t_download_s + secondsSince(downloadStarted)) * 1000) / 1000; });
 
-  // 5. Download các input khác (stage:, library:)
+  // 5. Download các input khác (stage:, library:): lời dẫn, nhạc, logo, nhỏ, cần trước lượt ghép cuối
+  const otherStarted = Date.now();
   for (let i = 0; i < otherInputs.length; i++) {
     const name = otherInputs[i]!;
     if (name.startsWith('stage:') || name.startsWith('library:')) {
@@ -325,10 +402,8 @@ async function handleStudioRender(
         log.info('Could not download input, skipping', { name, error: String(e) });
       }
     }
-    ctx.progress(50 + Math.round(10 * ((i + 1) / Math.max(1, otherInputs.length))), 'download_inputs');
   }
-
-  ctx.progress(62, 'rewrite_composition');
+  t.t_download_s = Math.round((t.t_download_s + secondsSince(otherStarted)) * 1000) / 1000;
 
   // 6. Ghi đè đường dẫn composition
   const localComposition = rewriteCompositionPaths(composition, inputToLocal);
@@ -337,16 +412,46 @@ async function handleStudioRender(
   const outDir = join(workDir, 'render_out');
   mkdirSync(outDir, { recursive: true });
 
-  const sourceChecksums = new Map<string, string>();
-  for (const seg of composition.segments) {
-    if (sourceChecksums.has(seg.source_id)) continue;
-    const known = inputIdentity.get(seg.source_path);
-    const local = inputToLocal.get(seg.source_path);
-    sourceChecksums.set(
-      seg.source_id,
-      known ?? (local ? `sha256:${await sha256File(local)}` : `input:${seg.source_path}`),
-    );
-  }
+  /** Input gốc (`asset:<id>`) của từng đoạn theo `order`: `localComposition` đã mang đường dẫn cục bộ. */
+  const inputByOrder = new Map(composition.segments.map((seg) => [seg.order, seg.source_path]));
+  /** Checksum của nguồn không phải asset (đã tải ở bước 5), tính một lần mỗi file. */
+  const otherChecksums = new Map<string, Promise<string>>();
+  const CLAMP_TOLERANCE_S = 0.5;
+  const clampWarned = new Set<string>();
+  /** Đoạn mà composition đòi tiếng nhưng file nguồn không có luồng tiếng: dựng câm, lượt tự kiểm cũng coi là câm. */
+  const silentOrders = new Set<number>();
+  /**
+   * Nguồn của một đoạn, chờ tới khi file của nó tải xong. `out` bị cắt về độ dài probe được khi file ngắn hơn timeline
+   * (cảnh báo khi lệch quá 0,5 s): đoạn đó giữ khung cuối, file ra vẫn dài đúng composition. File không có luồng tiếng
+   * thì `has_audio: false`: map `[0:a]` của nó làm hỏng cả mezzanine ("matches no streams"), nên đoạn đó dựng câm.
+   */
+  const sourceFor = async (seg: { order: number; source_path: string; in: number; out: number; has_audio: boolean }) => {
+    const input = inputByOrder.get(seg.order) ?? seg.source_path;
+    const ready = assetReady.get(input);
+    if (ready === undefined) {
+      const local = inputToLocal.get(input);
+      if (!otherChecksums.has(input)) otherChecksums.set(input, local ? sha256File(local).then((h) => `sha256:${h}`) : Promise.resolve(`input:${input}`));
+      return { path: seg.source_path, checksum: await otherChecksums.get(input)!, out: seg.out };
+    }
+    const asset = await ready;
+    let out = seg.out;
+    if (asset.duration !== null && seg.out > asset.duration) {
+      if (seg.out - asset.duration > CLAMP_TOLERANCE_S && !clampWarned.has(`${input}@${seg.out}`)) {
+        clampWarned.add(`${input}@${seg.out}`);
+        const warning = `Asset ${input}: segment out=${seg.out.toFixed(3)}s exceeds probed duration ${asset.duration.toFixed(3)}s by more than ${CLAMP_TOLERANCE_S}s; clamping.`;
+        log.warn(warning);
+        // Thêm vào warnings của composition (warnings array mutable sau khi parse)
+        if (!composition.warnings) (composition as Composition).warnings = [];
+        composition.warnings.push(warning);
+      }
+      out = Math.max(seg.in, asset.duration);
+    }
+    if (asset.hasAudio === false && seg.has_audio && !silentOrders.has(seg.order)) {
+      silentOrders.add(seg.order);
+      log.warn(`Asset ${input} has no audio stream; segment ${seg.order} is rendered silent`);
+    }
+    return { path: asset.path, checksum: asset.checksum, out, ...(asset.hasAudio === false ? { has_audio: false } : {}) };
+  };
 
   const clock = { now: () => new Date().toISOString() };
 
@@ -415,24 +520,68 @@ async function handleStudioRender(
     encoderCfg: extra.encoder ?? 'auto',
     // a preview is watched in a browser: same frame size, a much lighter encode (the mezzanines and their cache are shared)
     tier: isPreview ? 'preview' : 'final',
-    timeoutSeconds: ffmpegTimeoutMs / 1000,
-    sourceChecksums,
+    timeoutSeconds: renderBudgetSeconds(kind, extra),
+    // every segment's checksum comes from `sourceFor`, once its file is down
+    sourceChecksums: new Map(),
+    sourceFor,
+    mezzConcurrency: extra.mezz_concurrency ?? DEFAULT_MEZZ_CONCURRENCY,
+    finalSliceInputs: extra.final_slice_inputs ?? DEFAULT_FINAL_SLICE_INPUTS,
+    finalConcurrency: extra.final_concurrency ?? DEFAULT_FINAL_CONCURRENCY,
+    decodeThreads: extra.decode_threads ?? DEFAULT_DECODE_THREADS,
     signal: ctx.signal,
-    onProgress: (percent, stage) => ctx.progress(65 + Math.round(percent * 0.24), `render_${stage}`),
+    onProgress: (percent, stage) => {
+      renderPercent = percent;
+      // the first progress is the mezzanine phase starting at 0, before any segment has its file
+      if (percent > 0 || stage !== 'mezzanine') renderStage = `render_${stage}`;
+      reportCombined();
+    },
   };
 
-  ctx.progress(65, 'render');
-  log.info('Calling renderComposition', { canvas: `${payload.canvas.width}x${payload.canvas.height}` });
+  log.info('Calling renderComposition', { canvas: `${payload.canvas.width}x${payload.canvas.height}`, mezz_concurrency: renderInput.mezzConcurrency, download_concurrency: downloadConcurrency });
 
-  const { report, episodePath } = await renderComposition(renderDeps, renderInput);
-
-  ctx.progress(90, 'upload_video');
+  let rendered: Awaited<ReturnType<typeof renderComposition>>;
+  try {
+    rendered = await renderComposition(renderDeps, renderInput);
+  } finally {
+    // a failed render opens no new download (the ones running end on their own, into the SDK cache)
+    downloadsStopped = true;
+  }
+  const { report, episodePath, timings } = rendered;
+  t.t_mezz_s = timings.mezz_s;
+  t.t_source_wait_s = timings.source_wait_s;
+  t.t_even_s = timings.even_s;
+  t.t_loudnorm_s = timings.loudnorm_s;
+  t.t_final_encode_s = timings.final_encode_s;
 
   // 8. Upload video output
   const outputRelPath = payload.output;
   const videoStats = statSync(episodePath);
 
-  await ctx.upload(episodePath, outputRelPath, 'video/mp4');
+  // Từ 90% đến 99% chạy theo số byte đã tải lên (thanh đứng yên ở 95% suốt mấy phút upload bị tưởng là treo và bị bấm
+  // dừng); tên bước là upload khi còn đang tải, là bước kiểm đang chạy khi đã tải xong.
+  let uploadedShare = 0;
+  let uploadDone = false;
+  let checkStage: string | null = null;
+  const reportTail = (): void => ctx.progress(90 + Math.floor(9 * uploadedShare), !uploadDone || checkStage === null ? 'upload_video' : checkStage);
+  reportTail();
+
+  // Bản 4K cỡ 9 GB tải lên mất hơn 10 phút: probe, thumbnail và tự kiểm (đều chỉ đọc file trên máy) chạy trong lúc đó.
+  // Upload hỏng giữa chừng thì báo lỗi sau khi các bước kia xong; trước đó không để thành rejection không ai bắt.
+  const uploadStarted = Date.now();
+  const uploading = ctx.upload(episodePath, outputRelPath, 'video/mp4', {
+    onProgress: (done, total) => {
+      const share = total > 0 ? Math.min(1, done / total) : 1;
+      const moved = Math.floor(9 * share) !== Math.floor(9 * uploadedShare);
+      uploadedShare = share;
+      if (moved) reportTail();
+    },
+  }).then(() => {
+    t.t_upload_s = secondsSince(uploadStarted);
+    uploadedShare = 1;
+    uploadDone = true;
+    reportTail();
+  });
+  uploading.catch(() => {});
 
   // 9. Probe video kết quả để lấy dims/duration
   let finalWidth = payload.canvas.width;
@@ -465,7 +614,9 @@ async function handleStudioRender(
   }> = [];
 
   if (!isPreview && payload.thumbnails.length > 0) {
-    ctx.progress(91, 'render_thumbnails');
+    checkStage = 'render_thumbnails';
+    reportTail();
+    const thumbnailsStarted = Date.now();
 
     // Xác định kích thước đích: landscape/square → 1280×720, portrait → 720×1280
     const isPortrait = payload.canvas.height > payload.canvas.width;
@@ -532,9 +683,8 @@ async function handleStudioRender(
         width: thumbW,
         height: thumbH,
       });
-
-      ctx.progress(91 + Math.round(4 * (n / payload.thumbnails.length)), 'render_thumbnails');
     }
+    t.t_thumbnails_s = secondsSince(thumbnailsStarted);
   }
 
   // 10b. Tự kiểm (payload.inspect): đứng hình, màn đen, im lặng, độ to từng đoạn, tờ ghép khung hình. Lỗi của lượt kiểm
@@ -542,13 +692,18 @@ async function handleStudioRender(
   let inspectEntry: { output: string; sheets: string[] } | undefined;
   const inspectWarnings: string[] = [];
   if (payload.inspect) {
-    ctx.progress(95, 'inspect');
+    checkStage = 'inspect';
+    reportTail();
+    const inspectStarted = Date.now();
     try {
       const { inspection, sheets } = await inspectRender(
         { ffmpeg, clock },
         {
           episodePath,
-          composition: composition as unknown as import('@ag-studio/render').Composition,
+          composition: {
+            ...composition,
+            segments: composition.segments.map((s) => (silentOrders.has(s.order) ? { ...s, has_audio: false } : s)),
+          } as unknown as import('@ag-studio/render').Composition,
           outDir: join(workDir, 'inspect'),
           hasAudio: episodeProbe?.has_audio ?? true,
           videoSeconds: episodeProbe?.video_seconds ?? null,
@@ -566,9 +721,14 @@ async function handleStudioRender(
       log.warn('Could not inspect the render', { error: String(e) });
       inspectWarnings.push('inspect_failed');
     }
+    t.t_inspect_s = secondsSince(inspectStarted);
   }
 
-  ctx.progress(96, 'upload_manifest');
+  checkStage = null;
+  reportTail();
+  await uploading;
+
+  ctx.progress(99, 'upload_manifest');
 
   // 11. Build render manifest
   const anyWatermarked = [...sourceMetas.values()].some((m) => m.watermarked);
@@ -603,13 +763,28 @@ async function handleStudioRender(
   });
 
   await ctx.uploadJson(RENDER_MANIFEST_PATH, renderManifest);
+  t.t_total_s = secondsSince(jobStarted);
 
+  const stats = {
+    ...t,
+    encoder: report.encoder,
+    source_gb: Math.round(sourceBytes / 1e7) / 100,
+    mezz_rendered: report.segments.rendered,
+    mezz_cached: report.segments.cached,
+    mezz_concurrency: renderInput.mezzConcurrency ?? 1,
+    download_concurrency: downloadConcurrency,
+    final_slices: timings.final_slices,
+    final_slice_inputs: renderInput.finalSliceInputs ?? 0,
+    final_concurrency: renderInput.finalConcurrency ?? 1,
+    decode_threads: renderInput.decodeThreads ?? 0,
+  };
   log.info(`studio.${kind} done`, {
     width: finalWidth,
     height: finalHeight,
     duration_s: finalDuration,
     size_bytes: videoStats.size,
     thumbnails: thumbnailManifestEntries.length,
+    ...stats,
   });
 
   return {
@@ -620,6 +795,7 @@ async function handleStudioRender(
       duration_s: finalDuration,
       size_bytes: videoStats.size,
       watermarked: anyWatermarked,
+      ...stats,
     },
   };
 }

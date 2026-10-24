@@ -415,6 +415,16 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
       const result = await handler(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
 
       expect(result.manifest).toBe('render.json');
+      // the job result says how long each step took (farm shows the summary in the job's detail)
+      // a 4-second episode is too short to slice: one pass, whatever final_slice_inputs says
+      expect(result.summary).toMatchObject({
+        encoder: 'cpu', mezz_rendered: 1, mezz_cached: 0, mezz_concurrency: 3,
+        final_slices: 1, final_slice_inputs: 14, final_concurrency: 3, decode_threads: 8,
+      });
+      const keys = ['t_sign_s', 't_download_s', 't_mezz_s', 't_source_wait_s', 't_loudnorm_s', 't_final_encode_s', 't_upload_s', 't_inspect_s', 't_total_s'];
+      expect(keys.filter((key) => typeof result.summary[key] !== 'number')).toEqual([]);
+      expect(result.summary['t_total_s']).toBeGreaterThan(0);
+      expect(result.summary['source_gb']).toEqual(expect.any(Number));
 
       const renderManifest = store.jsonUploads.get('render.json');
       expect(renderManifest).toBeTruthy();
@@ -492,6 +502,140 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
       // the fixture's source and narration are both silent
       expect(inspection.issues).toEqual([expect.objectContaining({ code: 'silence', severity: 'error' })]);
       expect(store.uploaded.get('sheet-01.jpg')?.contentType).toBe('image/jpeg');
+    },
+    120_000,
+  );
+
+  test(
+    'the render is inspected while it uploads, and the manifest goes up once both are done',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      sign.register('asset:asset-001', sourceVideoPath);
+      sign.register('stage:tts/L001.wav', narrationWavPath);
+      const workDir = join(testDir, `run-inspect-upload-${randomUUID()}`);
+      mkdirSync(workDir, { recursive: true });
+      const compositionPath = join(workDir, 'composition.json');
+      writeFileSync(compositionPath, JSON.stringify(buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS)), 'utf8');
+      sign.register('stage:renders/1/composition.json', compositionPath);
+      const payload = {
+        production_id: 'prod-test', revision: 1, composition: 'stage:renders/1/composition.json',
+        canvas: CANVAS, output: 'renders/1/preview.mp4', inspect: true,
+      };
+      const events: string[] = [];
+      const ctx = {
+        job: { id: 'job-inspect-upload', type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: store.makeDownload(sign),
+        // the video's upload only ends once inspect.json is up: an inspection waiting for the upload would never come
+        upload: async (localPath: string, outputPath: string, contentType: string) => {
+          if (contentType === 'video/mp4') {
+            events.push('video:start');
+            const started = Date.now();
+            while (!events.includes('inspect.json') && Date.now() - started < 30_000) await new Promise((r) => setTimeout(r, 20));
+            events.push('video:end');
+          }
+          store.uploaded.set(outputPath, { localPath, contentType });
+        },
+        uploadJson: async (outputPath: string, data: unknown) => {
+          events.push(outputPath);
+          store.jsonUploads.set(outputPath, data);
+        },
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      expect(events).toEqual(['video:start', 'inspect.json', 'video:end', 'render.json']);
+    },
+    120_000,
+  );
+
+  test(
+    'from 90% the progress follows the bytes uploaded, and never goes back',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      sign.register('asset:asset-001', sourceVideoPath);
+      sign.register('stage:tts/L001.wav', narrationWavPath);
+      const workDir = join(testDir, `run-upload-progress-${randomUUID()}`);
+      mkdirSync(workDir, { recursive: true });
+      const compositionPath = join(workDir, 'composition.json');
+      writeFileSync(compositionPath, JSON.stringify(buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS)), 'utf8');
+      sign.register('stage:renders/1/composition.json', compositionPath);
+      const payload = {
+        production_id: 'prod-test', revision: 1, composition: 'stage:renders/1/composition.json',
+        canvas: CANVAS, output: 'renders/1/preview.mp4', inspect: true,
+      };
+      const seen: [number, string][] = [];
+      const ctx = {
+        job: { id: 'job-upload-progress', type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: (percent: number, stage: string) => { seen.push([percent, stage]); },
+        download: store.makeDownload(sign),
+        // ten parts, the last one only once the inspection is up
+        upload: async (localPath: string, outputPath: string, contentType: string, opts?: { onProgress?: (done: number, total: number) => void }) => {
+          if (contentType === 'video/mp4') {
+            for (let part = 1; part <= 10; part++) {
+              if (part === 10) while (!store.jsonUploads.has('inspect.json')) await new Promise((r) => setTimeout(r, 20));
+              opts?.onProgress?.(part * 100, 1000);
+              await new Promise((r) => setTimeout(r, 5));
+            }
+          }
+          store.uploaded.set(outputPath, { localPath, contentType });
+        },
+        uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      const tail = seen.filter(([p]) => p >= 90);
+      expect(tail[0]).toEqual([90, 'upload_video']);
+      expect(tail.every(([p], i) => i === 0 || p >= tail[i - 1]![0])).toBe(true);
+      // the bar moves while the file goes up: 90, then more steps, 99 when the last part is in
+      const uploading = tail.filter(([, s]) => s === 'upload_video').map(([p]) => p);
+      expect(new Set(uploading).size).toBeGreaterThanOrEqual(8);
+      expect(uploading).toContain(99);
+      expect(tail[tail.length - 1]).toEqual([99, 'upload_manifest']);
+    },
+    120_000,
+  );
+
+  test(
+    'a video upload that fails fails the job, after the inspection, with no manifest',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      sign.register('asset:asset-001', sourceVideoPath);
+      sign.register('stage:tts/L001.wav', narrationWavPath);
+      const workDir = join(testDir, `run-upload-fail-${randomUUID()}`);
+      mkdirSync(workDir, { recursive: true });
+      const compositionPath = join(workDir, 'composition.json');
+      writeFileSync(compositionPath, JSON.stringify(buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS)), 'utf8');
+      sign.register('stage:renders/1/composition.json', compositionPath);
+      const payload = {
+        production_id: 'prod-test', revision: 1, composition: 'stage:renders/1/composition.json',
+        canvas: CANVAS, output: 'renders/fail/preview.mp4', inspect: true,
+      };
+      const json: string[] = [];
+      const ctx = {
+        job: { id: 'job-upload-fail', type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: store.makeDownload(sign),
+        upload: async (_localPath: string, _outputPath: string, contentType: string) => {
+          if (contentType === 'video/mp4') throw new Error('Part 3 PUT failed: HTTP 503');
+        },
+        uploadJson: async (outputPath: string) => {
+          json.push(outputPath);
+        },
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await expect(makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext)).rejects.toThrow('HTTP 503');
+      expect(json).toEqual(['inspect.json']);
     },
     120_000,
   );
@@ -804,6 +948,203 @@ describe('asset out clamp', () => {
       }
     },
     120_000,
+  );
+});
+
+describe('asset without an audio stream', () => {
+  test(
+    'a video-only asset marked has_audio renders silent instead of failing its mezzanine, and the render is still inspected',
+    async () => {
+      try { await execFileAsync(FFMPEG, ['-version'], { timeout: 5000 }); } catch {
+        console.log('ffmpeg not available, skipping');
+        return;
+      }
+
+      const dir = join(tmpdir(), `render-mute-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      const vid = join(dir, 'flycam.mp4');
+      await execFileAsync(FFMPEG, ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=25:duration=3', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an', '-y', vid], { timeout: 30_000 });
+
+      const sign = new FakeSignClient();
+      const store = new FakeUploadStore();
+      sign.register('asset:asset-mute', vid);
+      const comp = {
+        schema_version: 'harness.composition/v1',
+        output: { width: 320, height: 180, fps: 25, codec: 'h264' },
+        voice: 'original',
+        language: 'vi',
+        total_seconds: 3,
+        request_id: 'req_01ABCDEFGHJKMNPQRSTVWXYZ12',
+        brand: null,
+        segments: [
+          {
+            order: 0, source_id: 'src_01ABCDEFGHJKMNPQRSTVWXYZ12', source_path: 'asset:asset-mute', in: 0, out: 3, start: 0, end: 3,
+            fit: 'scale_pad', has_audio: true, transition_out: { kind: 'cut', seconds: 0, tail_available: false },
+          },
+        ],
+        text_events: [],
+        captions: { mode: 'none', cues: [] },
+        music: null,
+        logo: null,
+        narration: [],
+        transitions: { requested: 0, applied: 0, downgraded: [] },
+        warnings: [],
+      };
+      const workDir = join(dir, 'work');
+      mkdirSync(workDir, { recursive: true });
+      const compPath = join(workDir, 'composition.json');
+      writeFileSync(compPath, JSON.stringify(comp), 'utf8');
+      sign.register('stage:composition.json', compPath);
+
+      const warnMessages: string[] = [];
+      const payload = {
+        production_id: 'prod-mute', revision: 1, composition: 'stage:composition.json', canvas: { width: 320, height: 180 },
+        output: 'renders/mute/preview.mp4', inspect: true,
+      };
+      const ctx = {
+        job: { id: 'job-mute', type: 'studio.render_preview', attempt: 1, ticket: 't', lease_token: 'l', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload,
+        workDir,
+        sign,
+        cache: null,
+        log: {
+          info: () => {},
+          warn: (msg: string) => { warnMessages.push(msg); },
+          error: () => {},
+          debug: () => {},
+          child: function() { return this; },
+        },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: store.makeDownload(sign),
+        upload: store.makeUpload(),
+        uploadJson: store.makeUploadJson(),
+      };
+
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await makeStudioRenderPreviewHandler({})(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      expect(warnMessages.some((w) => w.includes('has no audio stream'))).toBe(true);
+      const video = store.uploaded.get('renders/mute/preview.mp4');
+      expect(video).toBeTruthy();
+      const { probeMedia } = await import('../ffmpeg-utils.js');
+      const probe = await probeMedia(video!.localPath, FFPROBE);
+      expect(probe.has_audio).toBe(true);
+      expect(Math.abs((probe.audio_seconds ?? 0) - 3)).toBeLessThanOrEqual(0.1);
+      expect(store.jsonUploads.get('inspect.json')).toBeTruthy();
+    },
+    120_000,
+  );
+});
+
+// ---- Downloads alongside the render ----
+
+describe('sources download while the render runs', () => {
+  test(
+    'at most download_concurrency files at once, first used first, and the first clip is built before the last file is down',
+    async () => {
+      try { await execFileAsync(FFMPEG, ['-version'], { timeout: 5000 }); } catch { return; }
+      const dir = join(tmpdir(), `render-overlap-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      const clips = ['c1', 'c2', 'c3'];
+      // three different files (same length, same content would be one mezzanine under one cache key)
+      for (const [k, c] of clips.entries()) await createLavfiVideo(join(dir, `${c}.mp4`), 2 + k, 320, 180);
+      const wavPath = join(dir, 'L001.wav');
+      writeFileSync(wavPath, buildSilentWav(6));
+
+      const sign = new FakeSignClient();
+      const store = new FakeUploadStore();
+      for (const c of clips) sign.register(`asset:${c}`, join(dir, `${c}.mp4`));
+      sign.register('stage:tts/L001.wav', wavPath);
+      // the timeline uses c2 first, then c1, then c3
+      const order = ['c2', 'c1', 'c3'];
+      const comp = {
+        ...buildAssetComposition('asset:c2', 6, wavPath, { width: 320, height: 180 }),
+        segments: order.map((c, k) => ({
+          order: k, source_id: `src_01ABCDEFGHJKMNPQRSTVWXY${k}Z${k}`, source_path: `asset:${c}`, in: 0, out: 2, start: 2 * k, end: 2 * k + 2,
+          fit: 'scale_pad', has_audio: true, transition_out: { kind: 'cut', seconds: 0, tail_available: false },
+        })),
+        narration: [{ line_id: 'L001', wav: 'stage:tts/L001.wav', start: 0, end: 6 }],
+      };
+      const workDir = join(dir, 'work');
+      mkdirSync(workDir, { recursive: true });
+      writeFileSync(join(workDir, 'composition.json'), JSON.stringify(comp), 'utf8');
+      sign.register('stage:composition.json', join(workDir, 'composition.json'));
+
+      const events: string[] = [];
+      let running = 0;
+      let maxRunning = 0;
+      const plainDownload = store.makeDownload(sign);
+      const download = async (inputName: string, dest: string) => {
+        if (!inputName.startsWith('asset:')) return plainDownload(inputName, dest);
+        running++;
+        maxRunning = Math.max(maxRunning, running);
+        events.push(`start:${inputName}`);
+        // the last file the timeline needs is slow to come
+        await new Promise((r) => setTimeout(r, inputName === 'asset:c3' ? 3000 : 100));
+        await plainDownload(inputName, dest);
+        running--;
+        events.push(`done:${inputName}`);
+      };
+      const payload = { production_id: 'prod-overlap', revision: 1, composition: 'stage:composition.json', canvas: { width: 320, height: 180 }, output: 'renders/1/preview.mp4' };
+      const ctx = {
+        job: { id: 'job-overlap', type: 'studio.render_preview', attempt: 1, ticket: 't', lease_token: 'l', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: (_pct: number, stage: string) => {
+          if (stage === 'render_mezzanine' && !events.includes('mezzanine')) events.push('mezzanine');
+        },
+        download, upload: store.makeUpload(), uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      const result = await makeStudioRenderPreviewHandler({ encoder: 'cpu', download_concurrency: 2, mezz_concurrency: 2, mezz_cache_dir: join(dir, 'mezz') })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext);
+
+      expect(maxRunning).toBe(2);
+      expect(events.filter((e) => e.startsWith('start:'))).toEqual(['start:asset:c2', 'start:asset:c1', 'start:asset:c3']);
+      expect(events.indexOf('mezzanine')).toBeGreaterThan(-1);
+      expect(events.indexOf('mezzanine')).toBeLessThan(events.indexOf('done:asset:c3'));
+      expect(result.summary).toMatchObject({ download_concurrency: 2, mezz_concurrency: 2, mezz_rendered: 3 });
+      expect(result.summary['t_source_wait_s']).toBeGreaterThan(1);
+      const video = store.uploaded.get('renders/1/preview.mp4');
+      expect(Math.abs((await probeVideo(video!.localPath)).duration - 6)).toBeLessThan(0.2);
+    },
+    120_000,
+  );
+
+  test(
+    'a source that fails to download fails the job with that error',
+    async () => {
+      try { await execFileAsync(FFMPEG, ['-version'], { timeout: 5000 }); } catch { return; }
+      const dir = join(tmpdir(), `render-dlfail-${randomUUID()}`);
+      mkdirSync(dir, { recursive: true });
+      await createLavfiVideo(join(dir, 'a.mp4'), 3, 320, 180);
+      const wavPath = join(dir, 'L001.wav');
+      writeFileSync(wavPath, buildSilentWav(3));
+      const sign = new FakeSignClient();
+      const store = new FakeUploadStore();
+      sign.register('asset:a', join(dir, 'a.mp4'));
+      sign.register('stage:tts/L001.wav', wavPath);
+      const workDir = join(dir, 'work');
+      mkdirSync(workDir, { recursive: true });
+      writeFileSync(join(workDir, 'composition.json'), JSON.stringify(buildAssetComposition('asset:a', 3, wavPath, { width: 320, height: 180 })), 'utf8');
+      sign.register('stage:composition.json', join(workDir, 'composition.json'));
+      const plainDownload = store.makeDownload(sign);
+      const payload = { production_id: 'prod-dlfail', revision: 1, composition: 'stage:composition.json', canvas: { width: 320, height: 180 }, output: 'renders/1/preview.mp4' };
+      const ctx = {
+        job: { id: 'job-dlfail', type: 'studio.render_preview', attempt: 1, ticket: 't', lease_token: 'l', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload, workDir, sign, cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: async (name: string, dest: string) => { if (name.startsWith('asset:')) throw new Error('fetch failed'); return plainDownload(name, dest); },
+        upload: store.makeUpload(), uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      await expect(makeStudioRenderPreviewHandler({ encoder: 'cpu' })(ctx as unknown as import('@ag-farm/worker-sdk').JobContext)).rejects.toThrow('fetch failed');
+      expect(store.uploaded.size).toBe(0);
+    },
+    60_000,
   );
 });
 

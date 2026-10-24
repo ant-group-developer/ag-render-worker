@@ -29,8 +29,13 @@ export interface RenderWorkerExtra {
   unload_ollama_before_tts?: boolean;
   /** URL Ollama. Mặc định: 'http://localhost:11434'. */
   ollama_url?: string;
-  /** Timeout (giây) cho mỗi lệnh ffmpeg. Mặc định: 3600. */
+  /** Timeout (giây) cho mỗi lệnh ffmpeg ngoài lần render (kiểm bản render, xuất Premiere). Mặc định: 3600. */
   ffmpeg_timeout_s?: number;
+  /**
+   * Thời gian (giây) cho cả một lần render, mọi lệnh ffmpeg của nó cộng lại, 600–86400. Mặc định: 10800 (3 giờ) cho bản
+   * cuối, 3600 cho bản xem trước. Đặt thì áp cho cả hai.
+   */
+  render_budget_s?: number;
   /** Thư mục chứa arial.ttf. Mặc định: thư mục font của hệ điều hành (xem fonts.ts). */
   fonts_dir?: string;
   /** Thư mục font OFL đóng kèm (có `fonts.json`). Mặc định: `fonts/` của gói (xem fonts.ts). */
@@ -48,12 +53,34 @@ export interface RenderWorkerExtra {
   mezz_cache_dir?: string;
   /** Trần dung lượng cache mezzanine (GB). Mặc định: 20. */
   mezz_cache_gb?: number;
+  /**
+   * Số mezzanine dựng cùng lúc trong một job render, 1–8. Mặc định: 3 (một ffmpeg chỉ dùng vài nhân: máy farm đo được
+   * 10–45% CPU lúc render). Máy thiếu RAM (mỗi luồng giải mã 4K cần khoảng 1,5 GB) thì hạ xuống.
+   */
+  mezz_concurrency?: number;
+  /** Số file nguồn tải cùng lúc trong một job render, 1–6. Mặc định: 2. Đoạn nào có file rồi thì dựng ngay. */
+  download_concurrency?: number;
+  /**
+   * Lượt ghép cuối cắt hình thành từng đoạn chừng bấy nhiêu clip mezzanine (cả đuôi dissolve), 0–64; 0 = một lượt như
+   * trước. Mặc định: 14. Một lượt mở mọi clip cùng lúc, mỗi clip 4K giữ khung hình trong bộ giải mã: bản 137 clip ngốn
+   * ~30 GB trên máy 32 GB rồi phải dùng ổ đĩa thay RAM hoặc hết bộ nhớ.
+   */
+  final_slice_inputs?: number;
+  /** Số đoạn của lượt ghép cuối chạy cùng lúc, 1–4. Mặc định: 3 (mỗi đoạn một phiên NVENC). */
+  final_concurrency?: number;
+  /** Số luồng giải mã của mỗi clip trong lượt ghép cuối, 1–32. Mặc định: 8 (ffmpeg tự chọn tới 16 trên máy farm). */
+  decode_threads?: number;
   /** Thiết bị cho nhận dạng lời nói: 'auto' (như tts_device), 'cuda', 'cuda:1', 'cpu'. Mặc định: 'auto'. */
   transcribe_device?: string;
   /** compute_type của faster-whisper. Mặc định: float16 trên GPU, int8 trên CPU. */
   transcribe_compute_type?: string;
   /** batch_size của WhisperX. Mặc định: 8 (hạ xuống 4 nếu thiếu VRAM). */
   transcribe_batch_size?: number;
+}
+
+/** Một số nguyên trong [min, max]; giá trị khác (thiếu, sai kiểu, ngoài khoảng) là `undefined`, tức dùng mặc định. */
+function intIn(v: unknown, min: number, max: number): number | undefined {
+  return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : undefined;
 }
 
 export function getExtra(extra: Record<string, unknown> | undefined): RenderWorkerExtra {
@@ -71,6 +98,7 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
     ollama_url: typeof extra['ollama_url'] === 'string' ? extra['ollama_url'] : undefined,
     ffmpeg_timeout_s:
       typeof extra['ffmpeg_timeout_s'] === 'number' ? extra['ffmpeg_timeout_s'] : undefined,
+    render_budget_s: intIn(extra['render_budget_s'], 600, 86_400),
     fonts_dir: typeof extra['fonts_dir'] === 'string' ? extra['fonts_dir'] : undefined,
     bundled_fonts_dir: typeof extra['bundled_fonts_dir'] === 'string' ? extra['bundled_fonts_dir'] : undefined,
     tts_device: typeof extra['tts_device'] === 'string' ? extra['tts_device'] : undefined,
@@ -83,6 +111,11 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
       typeof extra['mezz_cache_gb'] === 'number' && extra['mezz_cache_gb'] > 0
         ? extra['mezz_cache_gb']
         : undefined,
+    mezz_concurrency: intIn(extra['mezz_concurrency'], 1, 8),
+    download_concurrency: intIn(extra['download_concurrency'], 1, 6),
+    final_slice_inputs: intIn(extra['final_slice_inputs'], 0, 64),
+    final_concurrency: intIn(extra['final_concurrency'], 1, 4),
+    decode_threads: intIn(extra['decode_threads'], 1, 32),
     transcribe_device: typeof extra['transcribe_device'] === 'string' ? extra['transcribe_device'] : undefined,
     transcribe_compute_type:
       typeof extra['transcribe_compute_type'] === 'string' ? extra['transcribe_compute_type'] : undefined,

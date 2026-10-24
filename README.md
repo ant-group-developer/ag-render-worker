@@ -62,6 +62,56 @@ heartbeat; trang **Máy** của farm hiện các số này và biểu đồ 1 gi
 `metrics: false` trong `config.yaml`. Hub farm phải lên bản có số đo trước (hub cũ từ chối thì worker tự thôi gửi số đo
 trong một giờ, vẫn nhận việc bình thường).
 
+### Tốc độ render
+
+Một job `studio.render_preview`/`studio.render_final` tải file nguồn **2 file một lúc** (`extra.download_concurrency`,
+1–6), theo thứ tự đoạn đầu tiên dùng tới. Nó dựng mezzanine **3 đoạn một lúc** (`extra.mezz_concurrency`, 1–8), và
+đoạn nào có file rồi thì dựng ngay, không đợi tải hết. Máy farm đo được 10–45% CPU khi chỉ dựng một đoạn một lúc, và
+một luồng tải đã gần kịch cổng 1 Gbit, nên lợi chính là phần tải chạy chồng lên phần dựng. Mỗi luồng dựng giải mã một
+file 4K, cần khoảng 1,5 GB RAM: máy chật RAM (chạy chung ag-scan-worker) thì hạ `mezz_concurrency`.
+
+Lượt ghép cuối cắt hình thành từng đoạn chừng **14 clip** mezzanine, tính cả đuôi dissolve (`extra.final_slice_inputs`,
+0–64; 0 là một lượt). Nó chỉ cắt ở chỗ chuyển cảnh cut hoặc dip_black, không cắt giữa dissolve, và mỗi đoạn dài ít nhất
+30 giây. Mỗi lúc chạy **3 đoạn** (`extra.final_concurrency`, 1–4), mỗi đoạn một ffmpeg và một phiên NVENC. Một ffmpeg làm
+tiếng chạy song song, rồi các đoạn được nối lại không encode lại. Mỗi clip giải mã bằng **8 luồng**
+(`extra.decode_threads`, 1–32).
+
+Cả một lần render có **3 giờ** cho bản cuối và **1 giờ** cho bản xem trước (`extra.render_budget_s`, 600–86400 giây, đặt thì
+áp cho cả hai); `ffmpeg_timeout_s` chỉ còn cho các lệnh ngoài lần render. Một lần encode bằng NVENC hỏng thì chạy lại bằng
+CPU, trừ khi nó hỏng vì hết giờ hoặc chỉ còn dưới 5 phút: khi đó job báo lỗi "not retried on cpu" kèm lý do.
+
+Lý do: ghép một lượt mở mọi clip cùng lúc, và mỗi bộ giải mã 4K giữ khung hình của từng luồng (ffmpeg tự chọn tới 16 luồng
+trên máy farm). Bản 137 clip ngốn khoảng 30 GB trên máy 32 GB, phải dùng ổ đĩa thay RAM hoặc chết vì hết bộ nhớ. Đo trên
+bản 127 clip 4K: ffmpeg 6.1 ghép 3 đoạn lớn cùng lúc thì hết bộ nhớ, còn 9 đoạn chạy 3 cùng lúc với 8 luồng xong trong
+194 s với 15 GB. File tạm của các đoạn lớn bằng chính video, nên lúc nối cần trống thêm chừng ấy ổ đĩa. Video ngắn hoặc
+toàn dissolve vẫn chạy một lượt.
+
+Bản render tải lên trong lúc worker probe, làm thumbnail và tự kiểm. Upload lỗi thì job vẫn báo lỗi, sau khi các bước
+kia chạy xong. Từ 90% đến 99%, tiến độ của job chạy theo số byte đã tải lên (bước `upload_video`); tải xong mà bước kiểm
+còn chạy thì tên bước là `render_thumbnails` hoặc `inspect`.
+
+Kết quả job (chi tiết job trên farm, `summary`) ghi thời gian từng bước, đơn vị giây:
+
+| Khoá | Bước |
+|---|---|
+| `t_sign_s`, `t_download_s` | ký link; tải file nguồn và input nhỏ (lời dẫn, nhạc, logo) |
+| `t_mezz_s`, `t_source_wait_s` | dựng mezzanine; trong đó, tổng thời gian các luồng dựng đứng chờ file còn đang tải |
+| `t_even_s`, `t_loudnorm_s` | đo độ to từng đoạn (cân âm); đo loudnorm |
+| `t_final_encode_s` | lượt ghép và encode cuối |
+| `t_upload_s`, `t_thumbnails_s`, `t_inspect_s`, `t_total_s` | upload video; thumbnail; tự kiểm; cả job |
+
+Cùng chỗ đó có thêm:
+- `encoder`: encoder thật đã dùng, `nvenc` hoặc `cpu`;
+- `source_gb`: tổng dung lượng file nguồn, tải về hoặc lấy từ cache;
+- `mezz_rendered`, `mezz_cached`: số đoạn phải dựng và số đoạn lấy lại từ cache;
+- `mezz_concurrency`, `download_concurrency`: cấu hình job đã chạy;
+- `final_slices`: số đoạn lượt ghép cuối thật sự đã cắt (1 = một lượt);
+- `final_slice_inputs`, `final_concurrency`, `decode_threads`: cấu hình lượt ghép cuối job đã chạy.
+
+`t_upload_s` chạy chồng lên `t_thumbnails_s` và `t_inspect_s`, nên tổng các bước có thể lớn hơn `t_total_s`.
+
+`t_source_wait_s` lớn nghĩa là tải chậm hơn dựng; `t_final_encode_s` lớn nghĩa là chỗ nghẽn nằm ở lượt ghép cuối.
+
 ### Phát hành bản mới (máy build Windows)
 
 Tăng `version` trong `package.json` (hub từ chối bản không mới hơn bản đang phát hành), build `@ag-studio/render`, rồi:
