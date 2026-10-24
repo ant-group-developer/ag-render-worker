@@ -49,5 +49,34 @@ Remove-Item -Force -LiteralPath $script:AgLogFile
 
 Assert-Equal 'missing python has no version' (Get-AgPythonVersion 'C:\nope\python.exe') ''
 
+# ffmpeg 8.1: a fake package (file:// URL) holding bin\ffmpeg.exe, checked by its sha256
+$ff = Join-Path $env:TEMP "ag-setup-ffmpeg-$PID"
+New-Item -ItemType Directory -Force -Path (Join-Path $ff 'pkg\ffmpeg-9.9-essentials_build\bin') | Out-Null
+Set-Content -LiteralPath (Join-Path $ff 'pkg\ffmpeg-9.9-essentials_build\bin\ffmpeg.exe') -Value 'fake'
+Compress-Archive -Path (Join-Path $ff 'pkg\ffmpeg-9.9-essentials_build') -DestinationPath (Join-Path $ff 'pkg.zip')
+$sha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ff 'pkg.zip')).Hash
+$url = ([Uri](Join-Path $ff 'pkg.zip')).AbsoluteUri
+$script:AgLogFile = Join-Path $ff 'setup.log'
+$threw = $false
+try { Install-AgFfmpeg -InstallDir (Join-Path $ff 'bad') -Version '9.9' -Url $url -Sha256 ('0' * 64) | Out-Null } catch { $threw = $_.Exception.Message }
+Assert-Equal 'ffmpeg: a package whose sha256 differs is refused' ($threw -match 'sha256') $true
+Assert-Equal 'ffmpeg: nothing kept from a refused package' (Test-Path (Join-Path $ff 'bad\tools\ffmpeg-9.9-essentials_build')) $false
+$exe = Install-AgFfmpeg -InstallDir (Join-Path $ff 'ok') -Version '9.9' -Url $url -Sha256 $sha
+Assert-Equal 'ffmpeg: unpacked into <InstallDir>\tools' $exe (Join-Path $ff 'ok\tools\ffmpeg-9.9-essentials_build\bin\ffmpeg.exe')
+Assert-Equal 'ffmpeg: installed once, then reused' (Install-AgFfmpeg -InstallDir (Join-Path $ff 'ok') -Version '9.9' -Url 'file:///nope.zip' -Sha256 $sha) $exe
+New-Item -ItemType Directory -Force -Path (Join-Path $ff 'app') | Out-Null
+Write-AgFfmpegMarker -AppDir (Join-Path $ff 'app') -Exe $exe -Version '9.9' -Nvenc $true
+$marker = Get-Content -Raw (Join-Path $ff 'app\ffmpeg.json') | ConvertFrom-Json
+Assert-Equal 'ffmpeg: the marker names the binary for the worker' "$($marker.ffmpeg)|$($marker.version)|$($marker.nvenc)" "$exe|9.9|True"
+$real = Get-Command ffmpeg -ErrorAction SilentlyContinue
+if ($real) {
+  Test-AgFfmpegEncode -Exe $real.Source -Nvenc $false
+  Assert-Equal 'ffmpeg: a 2 s libx264 encode passes' $true $true
+} else { Write-Host 'skip ffmpeg encode test (no ffmpeg on PATH)' }
+$threw = $false
+try { Test-AgFfmpegEncode -Exe $exe -Nvenc $true } catch { $threw = $true }
+Assert-Equal 'ffmpeg: a binary that cannot encode fails the test' $threw $true
+Remove-Item -Recurse -Force -LiteralPath $ff
+
 if ($failures -gt 0) { Write-Host "$failures test loi" -ForegroundColor Red; exit 1 }
 Write-Host 'Tat ca test setup-render.ps1 deu qua' -ForegroundColor Green

@@ -194,7 +194,10 @@ Worker chạy bằng task hệ thống `ag-farm-render` (tài khoản SYSTEM, t�
 | Python | 3.11, chỉ cần khi chạy engine thật (`studio.tts`, `studio.transcribe`) |
 | GPU | NVIDIA ≥ RTX 3060 12 GB cho TTS thật; không có thì dùng `--dry-run` ở CI |
 
-ffmpeg/ffprobe lấy từ `ffmpeg-static`/`ffprobe-static` (hoặc `FFMPEG_PATH`/`FFPROBE_PATH`), không cần trên PATH.
+ffmpeg cho render theo thứ tự: `FFMPEG_PATH` của máy, ffmpeg 8.1 mà `deploy/setup-render.ps1` cài vào `<InstallDir>\tools`
+(mỗi lần cài/cập nhật: khoá sha256, encode thử 2 giây bằng NVENC khi có GPU NVIDIA, được thì ghi `<app>\ffmpeg.json`),
+rồi `ffmpeg-static` 6.1 đi kèm. 6.1 ngốn ~29 GB RAM ở lượt ghép cuối 4K, 8.1 chừng 14–16 GB. Encode thử hỏng (driver quá cũ)
+thì setup chỉ ghi `ffmpeg_note` và worker dùng 6.1. ffprobe lấy từ `ffprobe-static` (hoặc `FFPROBE_PATH`).
 
 ```sh
 git clone https://github.com/your-org/ag-render-worker

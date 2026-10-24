@@ -2,8 +2,10 @@
  * Tiện ích ffmpeg/ffprobe: resolve đường dẫn binary, probe media, cắt đoạn nguồn.
  */
 import { execFile, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { childEnvWithoutSecrets } from '@ag-farm/worker-sdk';
 
@@ -29,8 +31,24 @@ function resolveBinaryPath(envKey: string, fallbackName: string, staticPkg: stri
   return fallbackName; // dùng PATH
 }
 
+/**
+ * The ffmpeg deploy/setup-render.ps1 installed and tested for renders (ffmpeg 8.1: the bundled 6.1 takes ~29 GB for a
+ * 4K final pass), from `<app>/ffmpeg.json`; null when there is none or its binary is gone.
+ */
+export function ffmpegFromSetup(markerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'ffmpeg.json')): string | null {
+  try {
+    const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as { ffmpeg?: unknown };
+    return typeof marker.ffmpeg === 'string' && existsSync(marker.ffmpeg) ? marker.ffmpeg : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The machine's FFMPEG_PATH, else the ffmpeg setup installed, else the bundled ffmpeg-static (6.1), else PATH. */
 export function resolveFfmpeg(): string {
-  return resolveBinaryPath('FFMPEG_PATH', 'ffmpeg', 'ffmpeg-static');
+  const fromEnv = process.env['FFMPEG_PATH'];
+  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  return ffmpegFromSetup() ?? resolveBinaryPath('FFMPEG_PATH', 'ffmpeg', 'ffmpeg-static');
 }
 
 export function resolveFfprobe(): string {
