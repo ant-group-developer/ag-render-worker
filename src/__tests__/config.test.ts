@@ -1,7 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ROLE_PACKAGES } from '@ag-farm/protocol';
 import { RELEASE_PACKAGE, capabilitiesOptionsFor, getExtra, resolveYtdlp } from '../config.js';
-import { resolveFfmpeg } from '../ffmpeg-utils.js';
+import { ffmpegFromSetup, resolveFfmpeg } from '../ffmpeg-utils.js';
 import { renderBudgetSeconds } from '../render-handler.js';
 import { RENDER_FEATURE_LEVEL } from '@ag-studio/render';
 
@@ -71,6 +73,21 @@ describe('render worker config', () => {
   test('ffmpeg is the bundled binary, not a bare name on PATH', () => {
     // ffmpeg-static is a dependency: its binary is what render/TTS run
     expect(capabilitiesOptionsFor({}, nothingExists).ffmpegPath).toMatch(/[\\/]ffmpeg(\.exe)?$/);
+  });
+
+  test('the ffmpeg setup installed and tested (<app>/ffmpeg.json) when its binary is there', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-marker-'));
+    const exe = join(dir, 'ffmpeg.exe');
+    writeFileSync(exe, 'fake');
+    const marker = join(dir, 'ffmpeg.json');
+    writeFileSync(marker, JSON.stringify({ ffmpeg: exe, version: '8.1', nvenc: true }));
+    expect(ffmpegFromSetup(marker)).toBe(exe);
+    writeFileSync(marker, JSON.stringify({ ffmpeg: join(dir, 'gone.exe') }));
+    expect(ffmpegFromSetup(marker)).toBeNull();
+    writeFileSync(marker, '{ not json');
+    expect(ffmpegFromSetup(marker)).toBeNull();
+    expect(ffmpegFromSetup(join(dir, 'none.json'))).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
   });
 
   test('yt-dlp: the configured one, else the one in the python_bin venv, else PATH', () => {

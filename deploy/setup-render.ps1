@@ -10,9 +10,12 @@
 #      <venv>\ag-setup.stamp (hash requirements + bản torch + bản Python) không đổi và import vẫn chạy thì bỏ qua pip.
 #   5. Kiểm import torch, omnivoice, whisperx và CUDA; tải trước model (OmniVoice, Whisper large-v3) vào
 #      HF_HOME = <InstallDir>\models (worker chạy dưới SYSTEM nên không dùng cache của người cài)
+#   6. ffmpeg 8.1 vào <InstallDir>\tools (khoá sha256), encode thử 2 giây (NVENC khi có GPU NVIDIA, không thì libx264);
+#      được thì ghi <app>\ffmpeg.json để worker dùng bản này cho render. Hỏng thì worker dùng ffmpeg 6.1 đi kèm như trước
+#      (chỉ ghi log và ffmpeg_note, không tính là lỗi). FFMPEG_PATH của máy vẫn thắng.
 # Log: <InstallDir>\logs\setup.log. Kết quả cho install.ps1 (JSON): -ResultFile, mặc định <InstallDir>\logs\setup-result.json
 #   { "ok": true, "python_bin": "...", "ytdlp_bin": "...", "hf_home": "...", "gpu": true, "torch": "2.8.0+cu126",
-#     "cuda": true, "skipped_pip": false, "errors": [] }
+#     "cuda": true, "skipped_pip": false, "ffmpeg_bin": "...", "ffmpeg_note": null, "errors": [] }
 # Mã thoát 0 khi ok, 1 khi có lỗi (file kết quả vẫn được ghi).
 param(
   [string]$InstallDir = 'C:\ag-farm',
@@ -23,12 +26,21 @@ param(
   [switch]$Force,
   # Không cài torch/OmniVoice/WhisperX dù máy có GPU NVIDIA (GPU để việc khác)
   [switch]$SkipGpu,
+  # Không cài ffmpeg 8.1 (worker dùng ffmpeg 6.1 đi kèm)
+  [switch]$SkipFfmpeg,
   # Chỉ nạp các hàm (test: . .\setup-render.ps1 -DefineOnly)
   [switch]$DefineOnly
 )
 
 $AgTorchVersion = '2.8.0'
 $AgTorchIndex = 'https://download.pytorch.org/whl/cu126'
+
+# ffmpeg cho render: bản essentials của gyan.dev trên GitHub, sha256 lấy từ digest của asset. ffmpeg 6.1 đi kèm worker
+# ngốn ~29 GB RAM ở lượt ghép cuối 4K trên máy 32 GB; 8.1 (đa luồng mới) đo trên AG-189 còn 14-16 GB. 9.x cần driver
+# NVIDIA >= 610, driver trên farm chưa đạt.
+$AgFfmpegVersion = '8.1'
+$AgFfmpegUrl = 'https://github.com/GyanD/codexffmpeg/releases/download/8.1/ffmpeg-8.1-essentials_build.zip'
+$AgFfmpegSha256 = '8748283d821613d930b0e7be685aaa9df4ca6f0ad4d0c42fd02622b3623463c6'
 # Bản 3.11 cuối cùng python.org còn phát hành bộ cài Windows
 $AgPythonInstallerUrl = 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe'
 
@@ -158,6 +170,44 @@ function Test-AgNvidiaGpu {
   return $false
 }
 
+# ffmpeg.exe của bản $Version trong <InstallDir>\tools: đã có thì dùng lại, không thì tải, kiểm sha256, giải nén.
+function Install-AgFfmpeg {
+  param([string]$InstallDir, [string]$Version = $AgFfmpegVersion, [string]$Url = $AgFfmpegUrl, [string]$Sha256 = $AgFfmpegSha256)
+  $root = Join-Path $InstallDir 'tools'
+  $exe = Join-Path $root "ffmpeg-$Version-essentials_build\bin\ffmpeg.exe"
+  if (Test-Path -LiteralPath $exe) { return $exe }
+  New-Item -ItemType Directory -Force -Path $root | Out-Null
+  # Expand-Archive chỉ nhận đuôi .zip
+  $zip = Join-Path $root "ffmpeg-$Version-essentials_build.download.zip"
+  Write-AgLog "Tai ffmpeg $Version ($Url)"
+  try {
+    Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+    if ($hash -ne $Sha256.ToLowerInvariant()) { throw "sha256 cua goi ffmpeg khong khop ($hash)" }
+    Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+  } finally {
+    Remove-Item -Force -LiteralPath $zip -ErrorAction SilentlyContinue
+  }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "giai nen xong nhung khong thay $exe" }
+  return $exe
+}
+
+# Encode thử 2 giây: NVENC khi máy có GPU NVIDIA (driver quá cũ cho bản này thì hỏng ở đây), không thì libx264.
+function Test-AgFfmpegEncode {
+  param([string]$Exe, [bool]$Nvenc)
+  $codec = if ($Nvenc) { 'h264_nvenc' } else { 'libx264' }
+  Invoke-AgLogged -Name "Thu ffmpeg encode $codec" -FilePath $Exe -Arguments @(
+    '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=1920x1080:r=30:d=2', '-c:v', $codec, '-f', 'null', '-'
+  ) | Out-Null
+}
+
+# <app>\ffmpeg.json: ffmpeg worker dùng cho render (src/ffmpeg-utils.ts đọc).
+function Write-AgFfmpegMarker {
+  param([string]$AppDir, [string]$Exe, [string]$Version, [bool]$Nvenc)
+  $json = [ordered]@{ ffmpeg = $Exe; version = $Version; nvenc = $Nvenc } | ConvertTo-Json
+  [IO.File]::WriteAllText((Join-Path $AppDir 'ffmpeg.json'), $json, (New-Object Text.UTF8Encoding($false)))
+}
+
 # Dòng JSON cuối cùng trong output của setup_check.py.
 function Read-AgCheckJson {
   param([string[]]$Lines)
@@ -169,7 +219,7 @@ function Read-AgCheckJson {
 }
 
 function Invoke-AgSetupRender {
-  param([string]$InstallDir, [string]$ResultFile, [switch]$SkipModels, [switch]$Force, [switch]$SkipGpu)
+  param([string]$InstallDir, [string]$ResultFile, [switch]$SkipModels, [switch]$Force, [switch]$SkipGpu, [switch]$SkipFfmpeg)
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue'
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -194,7 +244,7 @@ function Invoke-AgSetupRender {
 
   $result = [ordered]@{
     ok = $false; python_bin = $null; ytdlp_bin = $null; hf_home = $hfHome
-    gpu = $false; torch = $null; cuda = $false; skipped_pip = $false; errors = @()
+    gpu = $false; torch = $null; cuda = $false; skipped_pip = $false; ffmpeg_bin = $null; ffmpeg_note = $null; errors = @()
   }
   Write-AgLog "=== setup-render ($appDir) ==="
 
@@ -286,6 +336,24 @@ function Invoke-AgSetupRender {
     }
   }
 
+  # 6. ffmpeg 8.1 cho render; hỏng thì worker dùng 6.1 đi kèm (không tính là lỗi cài)
+  Remove-Item -Force -LiteralPath (Join-Path $appDir 'ffmpeg.json') -ErrorAction SilentlyContinue
+  if ($SkipFfmpeg) {
+    $result.ffmpeg_note = 'bo qua (-SkipFfmpeg): worker dung ffmpeg 6.1 di kem'
+  } else {
+    try {
+      $exe = Install-AgFfmpeg -InstallDir $InstallDir
+      $nvenc = (-not $SkipGpu) -and (Test-AgNvidiaGpu)
+      Test-AgFfmpegEncode -Exe $exe -Nvenc $nvenc
+      Write-AgFfmpegMarker -AppDir $appDir -Exe $exe -Version $AgFfmpegVersion -Nvenc $nvenc
+      $result.ffmpeg_bin = $exe
+      Write-AgLog "ffmpeg $AgFfmpegVersion cho render: $exe"
+    } catch {
+      $result.ffmpeg_note = "ffmpeg $($AgFfmpegVersion): $($_.Exception.Message); worker dung ffmpeg 6.1 di kem"
+      Write-AgLog $result.ffmpeg_note
+    }
+  }
+
   $result.ok = ($result.errors.Count -eq 0)
   foreach ($e in $result.errors) { Write-AgLog "LOI $e" }
   Write-AgLog "=== setup-render xong: ok=$($result.ok) ==="
@@ -295,5 +363,5 @@ function Invoke-AgSetupRender {
 }
 
 if ($DefineOnly) { return }
-$r = Invoke-AgSetupRender -InstallDir $InstallDir -ResultFile $ResultFile -SkipModels:$SkipModels -Force:$Force -SkipGpu:$SkipGpu
+$r = Invoke-AgSetupRender -InstallDir $InstallDir -ResultFile $ResultFile -SkipModels:$SkipModels -Force:$Force -SkipGpu:$SkipGpu -SkipFfmpeg:$SkipFfmpeg
 if ($r.ok) { exit 0 } else { exit 1 }
