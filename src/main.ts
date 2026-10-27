@@ -70,6 +70,9 @@ async function main(): Promise<void> {
     capabilitiesOptions: capabilitiesOptionsFor(extra, undefined, check),
     // Máy cài bằng install.ps1 (config có updater_task): tự lên bản mới khi hub phát hành.
     selfUpdate: { package: RELEASE_PACKAGE },
+    // Một bản render một lúc trên mỗi máy (config `exclusive_kinds` ghi đè, `[]` = tắt): máy 4 slot CPU từng nhận cả 3
+    // bản render của một đợt rồi chạy chung, trong khi máy khác ngồi không.
+    exclusiveKinds: ['studio.render_preview', 'studio.render_final'],
     handlers: {
       'studio.tts': ttHandler,
       'studio.render_preview': previewHandler,

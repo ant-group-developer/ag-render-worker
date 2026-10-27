@@ -170,6 +170,10 @@ Không khai `kinds`: worker báo mọi loại job nó có handler **và** máy �
 import được torch, NVENC, yt-dlp), dò lúc worker khởi động (tức là sau mỗi lần cài/cập nhật). Không muốn máy nhận một
 loại: tắt công tắc của loại đó ở trang **Máy**. `kinds` trong config vẫn dùng được để ép danh sách (giao với handler).
 
+Mỗi máy chạy một bản render một lúc (`studio.render_preview`, `studio.render_final`): đang render thì worker không xin
+thêm bản render nào, hub giao cho máy khác. Trước đây máy 4 slot CPU nhận cả 3 bản render của một đợt. Muốn tắt thì ghi
+`exclusive_kinds: []` trong config (cần worker-sdk có `exclusiveKinds`, ag-farm 56465e3).
+
 ### Thư mục
 
 | Đường dẫn | Nội dung |
