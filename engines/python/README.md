@@ -17,8 +17,17 @@ python engines/python/tts.py --job <job.json> --result <result.json> [--dry-run]
 ```
 
 Exit code luôn là `0`. Mọi lỗi được báo qua `result.json` theo cấu trúc:
-- `{ ok: true, lines: [...] }` khi thành công
+- `{ ok: true, lines: [...], cleaned: { chunks, bursts_cut } }` khi thành công
 - `{ ok: false, kind: "contract"|"transient", reason: "..." }` khi lỗi
+
+Trước khi ghép câu, mỗi chunk được làm sạch (`voice_clean.py`, chỉ dùng stdlib):
+- Cắt một tiếng ngắn (≤ 0,6 s, sau đó lặng ≥ 0,2 s) ở đầu chunk khi cùng hình dạng đó mở đầu đủ nhiều chunk của job
+  (≥ 3 chunk và ≥ 30%). Đó là tiếng mẫu giọng lọt vào câu ("outch") khi `ref_text` không khớp mẫu hoặc mẫu bị cắt
+  giữa từ. Một chunk lẻ thì không cắt, vì không phân biệt được với một từ ngắn mở câu. Có cắt thì engine ghi log `warn`;
+  summary của job có `voice_bursts_cut`.
+- Cắt khoảng lặng trước và sau lời đọc, chỉ để lại 30 ms ở đầu và 80 ms ở cuối, rồi fade 10 ms ở hai đầu.
+
+Test: `python -I engines/python/test_voice_clean.py` (jest gọi qua `src/__tests__/voice-clean.test.ts`).
 
 ## Cài đặt
 

@@ -212,7 +212,11 @@ export function makeStudioTtsHandler(
 
     return {
       manifest: TTS_MANIFEST_PATH,
-      summary: { lines: manifestLines.length, language: payload.language },
+      summary: {
+        lines: manifestLines.length,
+        language: payload.language,
+        ...(runResult.result.cleaned ? { voice_bursts_cut: runResult.result.cleaned.bursts_cut } : {}),
+      },
     };
   };
 }
