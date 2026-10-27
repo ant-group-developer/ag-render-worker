@@ -31,7 +31,7 @@ export interface PremiereFile {
 }
 
 export interface PremiereTransition {
-  kind: "dissolve" | "dip_black";
+  kind: "dissolve" | "dip_black" | "dip_white";
   frames: number;
 }
 
@@ -177,7 +177,8 @@ export function premiereXml(seq: PremiereSequence): string {
       x.leaf("wipecode", 0).leaf("wipeaccuracy", 100).leaf("startratio", 0).leaf("endratio", 1).leaf("reverse", "FALSE");
     } else {
       x.open("parameter").leaf("parameterid", "color").leaf("name", "Color");
-      x.open("value").leaf("alpha", 255).leaf("red", 0).leaf("green", 0).leaf("blue", 0).close("value");
+      const c = t.kind === "dip_white" ? 255 : 0;
+      x.open("value").leaf("alpha", 255).leaf("red", c).leaf("green", c).leaf("blue", c).close("value");
       x.close("parameter");
     }
     x.close("effect").close("transitionitem");

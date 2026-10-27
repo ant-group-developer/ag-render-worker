@@ -250,8 +250,9 @@ async function handleExportPremiere(
     const inFrame = secondsToFrames(seg.in, fps);
     const t = seg.transition_out;
     const transitionOut: PremiereTransition | null =
-      t.kind === 'dissolve' && t.tail_available ? { kind: 'dissolve', frames: Math.max(1, secondsToFrames(t.seconds, fps)) }
-        : t.kind === 'dip_black' ? { kind: 'dip_black', frames: Math.max(1, secondsToFrames(t.seconds, fps)) }
+      // every transition over a tail (wipes, slides, zoom: render level 8) is a Cross Dissolve in Premiere
+      t.kind !== 'cut' && t.tail_available ? { kind: 'dissolve', frames: Math.max(1, secondsToFrames(t.seconds, fps)) }
+        : t.kind === 'dip_black' || t.kind === 'dip_white' ? { kind: t.kind, frames: Math.max(1, secondsToFrames(t.seconds, fps)) }
           : null;
     return [{ seg, startFrame, inFrame, outFrame: inFrame + length, transitionOut }];
   });
