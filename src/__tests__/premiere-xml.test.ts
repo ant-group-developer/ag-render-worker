@@ -503,6 +503,17 @@ describe('premiereXml: transitions', () => {
     expect(xml).toMatch(/<parameterid>color<\/parameterid>[\s\S]*?<alpha>255<\/alpha>\s*<red>0<\/red>\s*<green>0<\/green>\s*<blue>0<\/blue>/);
   });
 
+  test('a dip to white is a Dip to Color Dissolve in white', () => {
+    const xml = premiereXml(makeSeq({
+      clips: [
+        { file: f1, startFrame: 0, inFrame: 0, outFrame: 50, transitionOut: { kind: 'dip_white', frames: 10 } },
+        { file: f2, startFrame: 50, inFrame: 20, outFrame: 70 },
+      ],
+    }));
+    expect(item(xml, 'transitionitem')).toMatchObject({ start: '45', end: '55', alignment: 'center' });
+    expect(xml).toMatch(/<parameterid>color<\/parameterid>[\s\S]*?<alpha>255<\/alpha>\s*<red>255<\/red>\s*<green>255<\/green>\s*<blue>255<\/blue>/);
+  });
+
   test('a transition on the last clip is ignored', () => {
     const xml = premiereXml(makeSeq({ clips: [{ file: f1, startFrame: 0, outFrame: 50, transitionOut: { kind: 'dissolve', frames: 10 } }] }));
     expect(xml).not.toContain('<transitionitem>');

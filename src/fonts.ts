@@ -3,8 +3,8 @@
  *
  * - Arial: giấy phép không cho chép file font vào repo hay bucket, nên worker lấy Arial đã cài trên máy: Windows có sẵn
  *   trong `%WINDIR%\Fonts`, Linux cài gói `ttf-mscorefonts-installer`.
- * - Font OFL đóng kèm bản phát hành (`fonts/`, danh sách ở `fonts/fonts.json`, Studio `TEXT_FONTS`): Be Vietnam Pro,
- *   Noto Sans JP/KR, Noto Serif, Playfair Display. Noto Sans JP/KR còn vẽ chữ Nhật/Hàn dù font của kênh là gì.
+ * - Font OFL đóng kèm bản phát hành (`fonts/`, danh sách ở `fonts/fonts.json`, Studio `TEXT_FONTS`): 43 họ font (6 từ mức
+ *   render 4, 37 từ mức 8). Chữ thuộc bộ chữ font của kênh không có thì vẽ bằng Noto Sans KR/JP hoặc Be Vietnam Pro.
  *
  * Mỗi job chỉ chép đúng các font composition cần sang một thư mục riêng rồi đưa cho libass (`fontsdir`), để libass không
  * phải quét cả thư mục font của hệ thống và không lấy nhầm font khác.

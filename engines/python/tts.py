@@ -10,9 +10,12 @@ Job:    { device, model, dtype, num_step, speed, language, ref_audio, ref_text, 
         with the WhisperX model `ref_asr_model` (the one `studio.transcribe` uses) when given: OmniVoice clones
         better knowing what the sample says, and left to itself it would download Whisper and hear it per line.
 Result: { ok: true, lines: [{ line_id, wav_path, duration_seconds, chunks: [{text,start,end}],
-          words: [...] | null, alignment }] }
+          words: [...] | null, alignment }], cleaned: { chunks, bursts_cut } }
       | { ok: false, kind: "contract" | "transient", reason }
 Exit code is always 0, same contract as `transcribe.py`.
+
+Each chunk is cleaned before the line is joined (`voice_clean.py`): a burst the voice sample leaks into the start of
+every chunk is cut, silence around the words is trimmed to a short pad, both ends fade in/out over 10 ms.
 
 `--dry-run` never imports torch/omnivoice/whisperx: it validates the job and writes a 0.1s silent wav per
 line (via the stdlib `wave` module) with chunk spans proportional to each chunk's character count, so CI (no
@@ -28,6 +31,7 @@ import wave
 from typing import Any
 
 import engine_io as _io
+import voice_clean
 
 read_job = _io.read_job
 write_result = _io.write_result
@@ -135,15 +139,31 @@ def _generate_chunk(model: Any, np_mod: Any, text: str, ref_audio: str, ref_text
     raise last_error if last_error is not None else RuntimeError("chunk generation failed")
 
 
-def _synth_line(model: Any, np_mod: Any, line: dict[str, Any], ref_audio: str, ref_text: str, num_step: int, speed: float, language: str | None, instruct: str | None = None) -> tuple[Any, list[dict[str, Any]]]:
+def _clean_chunks(np_mod: Any, chunks: list[Any]) -> tuple[list[Any], int]:
+    """Every chunk of the job cut to its words (`voice_clean.plan_cuts`, which compares the chunks with each other),
+    with a short fade at both ends; also how many leaked bursts were cut."""
+    cuts, bursts = voice_clean.plan_cuts([c.tolist() for c in chunks], SAMPLE_RATE)
+    fade = int(voice_clean.FADE_SECONDS * SAMPLE_RATE)
+    out = []
+    for c, (start, end) in zip(chunks, cuts):
+        arr = np_mod.array(c[start:end], dtype=np_mod.float32)
+        n = min(fade, len(arr) // 2)
+        if n > 0:
+            ramp = np_mod.linspace(0.0, 1.0, n, dtype=np_mod.float32)
+            arr[:n] *= ramp
+            arr[-n:] *= ramp[::-1]
+        out.append(arr)
+    return out, bursts
+
+
+def _join_line(np_mod: Any, line: dict[str, Any], arrays: list[Any]) -> tuple[Any, list[dict[str, Any]]]:
     pause_seconds = float(line.get("pause_seconds") or 0.0)
     pause_samples = np_mod.zeros(int(round(pause_seconds * SAMPLE_RATE)), dtype=np_mod.float32)
     parts: list[Any] = []
     chunks_out: list[dict[str, Any]] = []
     cursor = 0.0
     texts: list[str] = line["chunks"]
-    for i, text in enumerate(texts):
-        arr = _generate_chunk(model, np_mod, text, ref_audio, ref_text, num_step, speed, language, instruct)
+    for i, (text, arr) in enumerate(zip(texts, arrays)):
         duration = len(arr) / SAMPLE_RATE
         start = cursor
         end = cursor + duration
@@ -227,8 +247,17 @@ def run(job: dict[str, Any], result_path: str) -> None:
 
     lines_out: list[dict[str, Any]] = []
     try:
+        read = [
+            [_generate_chunk(model, np, text, ref_audio, ref_text, job["num_step"], job["speed"], job["language"], instruct) for text in line["chunks"]]
+            for line in job["lines"]
+        ]
+        flat, bursts = _clean_chunks(np, [a for arrays in read for a in arrays])
+        cleaned = {"chunks": len(flat), "bursts_cut": bursts}
+        if bursts:
+            log("warn", "cut a sound the voice sample leaks into the start of the chunks; check the sample and its words", **cleaned)
         for line in job["lines"]:
-            audio, chunks_out = _synth_line(model, np, line, ref_audio, ref_text, job["num_step"], job["speed"], job["language"], instruct)
+            arrays, flat = flat[:len(line["chunks"])], flat[len(line["chunks"]):]
+            audio, chunks_out = _join_line(np, line, arrays)
             out_path = line["out_path"]
             os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
             sf.write(out_path, audio, SAMPLE_RATE)
@@ -282,7 +311,7 @@ def run(job: dict[str, Any], result_path: str) -> None:
                 except Exception as e:
                     log("warn", "alignment failed for line, keeping chunk-level timing", line_id=entry["line_id"], reason=str(e))
 
-    write_result(result_path, {"ok": True, "lines": lines_out})
+    write_result(result_path, {"ok": True, "lines": lines_out, "cleaned": cleaned})
 
 
 def main(argv: list[str] | None = None) -> None:

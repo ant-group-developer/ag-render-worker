@@ -5,7 +5,7 @@
  *   release/ag-render-worker-<version>/
  *     dist/worker.mjs        mọi JS, gồm cả @ag-farm/* và @ag-studio/render (link: lúc dev)
  *     package.json           chỉ còn ffmpeg-static, ffprobe-static (binary, cài lúc `npm install`)
- *     engines/python/        tts.py (OmniVoice), transcribe.py (WhisperX), beats.py (librosa), engine_io.py, requirements.txt
+ *     engines/python/        tts.py (OmniVoice) + voice_clean.py, transcribe.py (WhisperX), beats.py (librosa), engine_io.py, requirements.txt
  *     fonts/                 font OFL cho chữ trên video (fonts.json; tải bằng scripts/fetch-fonts.mjs, kiểm sha256)
  *     deploy/*               setup-render.ps1 (install.ps1 chạy: Python, venv, torch, yt-dlp, model), mẫu config
  *   release/ag-render-worker-<version>.zip
@@ -69,7 +69,7 @@ cpSync(join(root, 'engines', 'python'), join(out, 'engines', 'python'), {
   filter: (src) => !/(^|[\\/])__pycache__([\\/]|$)|\.pyc$/.test(src),
 });
 // Script mà handler gọi (python-runner.ts, transcribe-handler.ts): thiếu là máy worker báo lỗi Errno 2.
-for (const f of ['tts.py', 'transcribe.py', 'beats.py', 'engine_io.py', 'requirements.txt', 'setup_check.py']) {
+for (const f of ['tts.py', 'voice_clean.py', 'transcribe.py', 'beats.py', 'engine_io.py', 'requirements.txt', 'setup_check.py']) {
   if (!existsSync(join(out, 'engines', 'python', f))) throw new Error(`release: thieu engines/python/${f}`);
 }
 // Font OFL (Studio TEXT_FONTS): tải file còn thiếu, kiểm sha256 theo fonts.json, chép cả thư mục (máy thiếu font thì tự

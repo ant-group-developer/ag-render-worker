@@ -23,6 +23,8 @@ export interface TtsResultLine {
 
 export interface TtsEngineResult {
   lines: TtsResultLine[];
+  /** Chunk đã làm sạch (voice_clean.py): `bursts_cut` = số chunk bị cắt tiếng mẫu giọng lọt vào đầu (engine cũ không gửi). */
+  cleaned?: { chunks: number; bursts_cut: number };
 }
 
 export interface TtsEngineJob {
