@@ -7,7 +7,9 @@
  *   Python+torch, nên máy khai `python: null` và hub không giao `studio.tts` / `studio.transcribe` / `studio.beats`.
  * - Thiếu font OFL đóng kèm (`fonts/`): log lỗi, máy khai mức render ngay dưới `RENDER_FONT_LEVEL`, nên composition dùng
  *   font (và mọi trường mới hơn) không về máy này.
- * - Thiếu Arial: log lỗi (render có chữ sẽ lỗi `fonts_missing`).
+ * - Thiếu Arial: log lỗi và hạ mức render như khi thiếu font đóng kèm (Arial là một trong các font của
+ *   `RENDER_FONT_LEVEL`): composition chọn font không về máy này. Chữ không chọn font ở mức thấp hơn vẫn có thể tới và
+ *   lỗi `fonts_missing`.
  */
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -49,13 +51,14 @@ export function selfCheck(o: { enginesDir?: string; bundledDir?: string; fontsDi
   if (missingFonts.length > 0) {
     problems.push(`thiếu font ${missingFonts.join(', ')} (fonts/ của bản phát hành): máy khai mức render ${RENDER_FONT_LEVEL - 1} thay vì ${RENDER_FEATURE_LEVEL} (cài lại bản mới nhất)`);
   }
-  if (!arial) problems.push('không tìm thấy Arial: render có chữ sẽ lỗi fonts_missing (Windows: C:\\Windows\\Fonts\\arial.ttf; Linux: ttf-mscorefonts-installer; hoặc extra.fonts_dir)');
+  const lowered = Math.min(RENDER_FEATURE_LEVEL, RENDER_FONT_LEVEL - 1);
+  if (!arial) problems.push(`không tìm thấy Arial: máy khai mức render ${lowered} thay vì ${RENDER_FEATURE_LEVEL}, render có chữ sẽ lỗi fonts_missing (Windows: C:\\Windows\\Fonts\\arial.ttf; Linux: ttf-mscorefonts-installer; hoặc extra.fonts_dir)`);
   return {
     missingEngines,
     missingFonts,
     arial,
     python: missingEngines.length === 0,
-    studioRender: missingFonts.length > 0 ? Math.min(RENDER_FEATURE_LEVEL, RENDER_FONT_LEVEL - 1) : RENDER_FEATURE_LEVEL,
+    studioRender: missingFonts.length > 0 || !arial ? lowered : RENDER_FEATURE_LEVEL,
     problems,
   };
 }

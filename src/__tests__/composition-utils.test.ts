@@ -1,7 +1,13 @@
 /**
  * Test: thu thập input, ghi đè path, range-cut math.
  */
-import { collectCompositionInputs, rewriteCompositionPaths } from '../composition-utils.js';
+import {
+  collectCompositionInputs,
+  optionalCompositionInputs,
+  rewriteCompositionPaths,
+  unresolvedCompositionInputs,
+  withoutOptionalInputs,
+} from '../composition-utils.js';
 import type { Composition } from '../composition-utils.js';
 
 // ---- Fixture composition ----
@@ -182,3 +188,29 @@ describe('rewriteCompositionPaths', () => {
   });
 });
 
+describe('optional and unresolved inputs', () => {
+  test('only the logo and the brand dirs are optional', () => {
+    expect([...optionalCompositionInputs(makeComposition())].sort()).toEqual(
+      ['library:brands/ch1', 'library:brands/ch1/fonts', 'library:logo.png'].sort(),
+    );
+  });
+
+  test('a missing logo drops the logo, a missing brand dir drops the brand, the rest stays', () => {
+    const comp = makeComposition();
+    const noLogo = withoutOptionalInputs(comp, new Set(['library:logo.png']));
+    expect(noLogo.logo).toBeNull();
+    expect(noLogo.brand).toEqual(comp.brand);
+    const noBrand = withoutOptionalInputs(comp, new Set(['library:brands/ch1/fonts']));
+    expect(noBrand.brand).toBeNull();
+    expect(noBrand.logo).toEqual(comp.logo);
+    expect(withoutOptionalInputs(comp, new Set())).toBe(comp);
+  });
+
+  test('names every stage: / library: path left after the rewrite', () => {
+    const comp = makeComposition();
+    const all = new Map([...collectCompositionInputs(comp)].map((n) => [n, `/local/${n.replace(/\W/g, '_')}`]));
+    expect(unresolvedCompositionInputs(rewriteCompositionPaths(comp, all))).toEqual([]);
+    all.delete('library:music/track1.mp3');
+    expect(unresolvedCompositionInputs(rewriteCompositionPaths(comp, all))).toEqual(['library:music/track1.mp3']);
+  });
+});

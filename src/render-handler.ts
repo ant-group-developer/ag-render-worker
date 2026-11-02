@@ -25,7 +25,10 @@ import { renderComposition, probeNvenc, CompositionSchema, studioFontFamilies, s
 import type { Composition } from './composition-utils.js';
 import {
   collectCompositionInputs,
+  optionalCompositionInputs,
   rewriteCompositionPaths,
+  unresolvedCompositionInputs,
+  withoutOptionalInputs,
 } from './composition-utils.js';
 import { probeMedia, runFfmpeg, resolveFfmpeg, resolveFfprobe, type MediaProbeResult } from './ffmpeg-utils.js';
 import type { RenderWorkerExtra } from './config.js';
@@ -385,7 +388,12 @@ async function handleStudioRender(
   void Promise.all(Array.from({ length: Math.min(downloadConcurrency, queue.length) }, downloadLane))
     .then(() => { t.t_download_s = Math.round((t.t_download_s + secondsSince(downloadStarted)) * 1000) / 1000; });
 
-  // 5. Download các input khác (stage:, library:): lời dẫn, nhạc, logo, nhỏ, cần trước lượt ghép cuối
+  // 5. Download các input khác (stage:, library:): lời dẫn, nhạc, logo, nhỏ, cần trước lượt ghép cuối. Input bắt buộc
+  // (lời dẫn, nhạc, footage) tải không được thì job hỏng hẳn (`input_missing`, không thử lại: link ký đã được thử lại
+  // trong `ctx.download`, còn lại là file không có hoặc Studio không cho tải); trước đây bỏ qua và ra video thiếu tiếng.
+  // Chỉ logo / brand được bỏ.
+  const optionalInputs = optionalCompositionInputs(composition);
+  const skippedInputs = new Set<string>();
   const otherStarted = Date.now();
   for (let i = 0; i < otherInputs.length; i++) {
     const name = otherInputs[i]!;
@@ -399,14 +407,23 @@ async function handleStudioRender(
         await ctx.download(name, localPath);
         inputToLocal.set(name, localPath);
       } catch (e) {
-        log.info('Could not download input, skipping', { name, error: String(e) });
+        if (ctx.signal.aborted) throw e;
+        if (!optionalInputs.has(name)) {
+          throw new NonRetryableError('input_missing', `Could not download input ${name}: ${String(e)}`.slice(0, 2000));
+        }
+        log.warn('Could not download optional input, rendering without it', { name, error: String(e) });
+        skippedInputs.add(name);
       }
     }
   }
   t.t_download_s = Math.round((t.t_download_s + secondsSince(otherStarted)) * 1000) / 1000;
 
-  // 6. Ghi đè đường dẫn composition
-  const localComposition = rewriteCompositionPaths(composition, inputToLocal);
+  // 6. Ghi đè đường dẫn composition; còn input logic nào chưa thành file cục bộ thì không render.
+  const localComposition = rewriteCompositionPaths(withoutOptionalInputs(composition, skippedInputs), inputToLocal);
+  const unresolved = unresolvedCompositionInputs(localComposition);
+  if (unresolved.length > 0) {
+    throw new NonRetryableError('input_missing', `Composition inputs not downloaded: ${unresolved.join(', ')}`.slice(0, 2000));
+  }
 
   // 7. Chuẩn bị renderComposition
   const outDir = join(workDir, 'render_out');

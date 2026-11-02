@@ -40,6 +40,13 @@ describe('self-check at startup', () => {
     expect(capabilitiesOptionsFor({ python_bin: 'python' }, () => false, check)).toMatchObject({ detectPythonTorch: false, studioRender: RENDER_FONT_LEVEL - 1 });
   });
 
+  test('only Arial missing: the render level below fonts too, and said', () => {
+    const check = machine({ engines: ['tts.py', 'transcribe.py', 'beats.py', 'engine_io.py'], fonts: true, arial: false });
+    expect(check.studioRender).toBe(RENDER_FONT_LEVEL - 1);
+    expect(check.problems).toHaveLength(1);
+    expect(check.problems[0]).toContain('Arial');
+  });
+
   test('this repo ships every python engine', () => {
     expect(selfCheck().missingEngines).toEqual([]);
   });
