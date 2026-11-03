@@ -15,6 +15,10 @@
  * truyền khoá trên dòng lệnh), rồi
  *   node scripts/release.mjs --publish --upload https://api-farm.ant-group.net [--key-env TÊN_BIẾN]
  * Hub từ chối bản không mới hơn bản đang phát hành: tăng `version` trong package.json trước.
+ *
+ * Gói dựng từ ag-render-worker cùng ag-farm, ag-studio đang checkout cạnh nó: phát hành (--publish / --upload) bị chặn
+ * khi một trong ba repo có thay đổi chưa commit, hoặc khác nhánh đòi bằng `--branches ag-render-worker=main,ag-farm=main,
+ * ag-studio=main`; commit của cả ba được ghi vào latest.json (`source`). Đóng gói thử thì chỉ cảnh báo.
  */
 import { build } from 'esbuild';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -23,6 +27,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+
+// Phần chung với worker kia (đóng gói, zip, phát hành), nằm ở ag-farm/tools/worker-installer.
+const installer = join(root, '..', 'ag-farm', 'tools', 'worker-installer', 'package-release.mjs');
+const { branchesFromArgv, finishRelease, publishOptionsFromArgv, sourceCommits } = await import(pathToFileURL(installer).href);
+const publishing = process.argv.includes('--publish') || process.argv.includes('--upload');
+// Kiểm trước khi build vài phút: phát hành phải dựng lại được từ đúng các commit này.
+const source = sourceCommits(
+  { 'ag-render-worker': root, 'ag-farm': join(root, '..', 'ag-farm'), 'ag-studio': join(root, '..', 'ag-studio') },
+  { branches: branchesFromArgv(), strict: publishing },
+);
 const name = `ag-render-worker-${pkg.version}`;
 const out = join(root, 'release', name);
 
@@ -85,15 +99,13 @@ cpSync(join(root, 'deploy'), join(out, 'deploy'), { recursive: true });
 // install.ps1 của farm chạy file này lúc cài và lúc cập nhật (Python, venv, torch, yt-dlp, model)
 if (!existsSync(join(out, 'deploy', 'setup-render.ps1'))) throw new Error('release: thieu deploy/setup-render.ps1');
 
-// node_modules, runtime/node.exe, run.cmd, zip và phát hành lên farm (--publish --upload <hub>, hoặc --publish <dir>):
-// phần chung với worker kia, nằm ở ag-farm/tools/worker-installer.
-const installer = join(root, '..', 'ag-farm', 'tools', 'worker-installer', 'package-release.mjs');
-const { finishRelease, publishOptionsFromArgv } = await import(pathToFileURL(installer).href);
+// node_modules, runtime/node.exe, run.cmd, zip và phát hành lên farm (--publish --upload <hub>, hoặc --publish <dir>)
 await finishRelease({
   repoRoot: root,
   releaseRoot: join(root, 'release'),
   name,
   packageName: 'ag-render-worker', // = RELEASE_PACKAGE (src/config.ts): tên worker tự cập nhật theo
   version: pkg.version,
+  source,
   ...publishOptionsFromArgv(),
 });

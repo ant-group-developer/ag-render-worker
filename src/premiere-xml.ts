@@ -71,6 +71,9 @@ export interface PremiereSequence {
   sourceAudioMuted: boolean;
   /** Level of the A1 clips (0 when absent). */
   sourceAudioGainDb?: number;
+  /** The A1 volume line on top of that level (sequence frames, dB, straight between points, 0 outside them): the
+   * dips under a tts voice. */
+  sourceAudioEnvelope?: { frame: number; gainDb: number }[];
   /** A3, at 0 dB as the render mixes it. */
   narration?: PremiereClip[];
   markers: { frame: number; name: string }[];
@@ -220,12 +223,29 @@ export function premiereXml(seq: PremiereSequence): string {
   x.open("format").open("samplecharacteristics").leaf("depth", 16).leaf("samplerate", 48000).close("samplecharacteristics").close("format");
   x.open("track");
   if (!seq.sourceAudioMuted) {
+    const env = [...(seq.sourceAudioEnvelope ?? [])].sort((a, b) => a.frame - b.frame);
+    const base = 10 ** ((seq.sourceAudioGainDb ?? 0) / 20);
+    // dB of the volume line at sequence frame f
+    const envDb = (f: number) => {
+      const k = env.findIndex((p) => p.frame > f);
+      if (k === 0 || env.length === 0) return 0;
+      if (k === -1) return env.at(-1)!.gainDb;
+      const a = env[k - 1]!;
+      const b = env[k]!;
+      return a.gainDb + (b.gainDb - a.gainDb) * (f - a.frame) / (b.frame - a.frame);
+    };
     seq.clips.forEach((c, i) => {
       if (!c.file.hasAudio || c.muted) return;
+      // keyframes at the clip's edges and the line's bends inside it; `when` counts from the clip start, as the music's
+      const points = env.length
+        ? [...new Set([c.startFrame, endOf(c), ...env.map((p) => p.frame)])].filter((f) => f >= c.startFrame && f <= endOf(c)).sort((a, b) => a - b)
+        : [];
+      const dips = points.some((f) => envDb(f) !== 0);
       clipitem(`clipitem-a${i + 1}`, c.file.name, c.startFrame, endOf(c), inOf(c), outOf(c), c.file.durationFrames, () => {
         file(c.file);
         x.open("sourcetrack").leaf("mediatype", "audio").leaf("trackindex", 1).close("sourcetrack");
-        if (seq.sourceAudioGainDb) audioLevels(10 ** (seq.sourceAudioGainDb / 20));
+        if (dips) audioLevels(base, points.map((f) => [f - c.startFrame, round5(base * 10 ** (envDb(f) / 20))]));
+        else if (seq.sourceAudioGainDb) audioLevels(base);
         link([
           { id: `clipitem-v${i + 1}`, mediatype: "video", trackindex: 1, clipindex: i + 1 },
           { id: `clipitem-a${i + 1}`, mediatype: "audio", trackindex: 1, clipindex: audioIndex(seq, i) },

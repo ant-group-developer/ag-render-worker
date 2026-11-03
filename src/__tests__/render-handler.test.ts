@@ -463,6 +463,47 @@ describe('studio.render_preview handler (asset inputs, integration)', () => {
   );
 
   test(
+    'a required input (the narration) that cannot be downloaded fails the job with input_missing, not retried',
+    async () => {
+      if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;
+      sign.register('asset:asset-001', sourceVideoPath);
+      // stage:tts/L001.wav is not registered: its download fails
+
+      const workDir = join(testDir, `run-${randomUUID()}`);
+      mkdirSync(workDir, { recursive: true });
+      const comp = buildAssetComposition('asset:asset-001', ASSET_DURATION, narrationWavPath, CANVAS);
+      const compositionPath = join(workDir, 'composition.json');
+      writeFileSync(compositionPath, JSON.stringify(comp), 'utf8');
+      sign.register('stage:renders/1/composition.json', compositionPath);
+      const payload = {
+        production_id: 'prod-test', revision: 1, composition: 'stage:renders/1/composition.json', canvas: CANVAS,
+        output: 'renders/1/preview.mp4',
+      };
+      const ctx = {
+        job: { id: 'job-missing-input', type: 'studio.render_preview', attempt: 1, ticket: 't1', lease_token: 'l1', sign_url: 'http://fake/sign', payload, lane: 'interactive' },
+        payload,
+        workDir,
+        sign,
+        cache: null,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: function() { return this; } },
+        signal: new AbortController().signal,
+        progress: () => {},
+        download: store.makeDownload(sign),
+        upload: store.makeUpload(),
+        uploadJson: store.makeUploadJson(),
+      };
+      const { makeStudioRenderPreviewHandler } = await import('../render-handler.js');
+      const { errorToJobError } = await import('@ag-farm/worker-sdk');
+      const handler = makeStudioRenderPreviewHandler({ encoder: 'cpu' });
+      const err = await handler(ctx as unknown as import('@ag-farm/worker-sdk').JobContext).then(() => null, (e: unknown) => e);
+      expect(errorToJobError(err)).toMatchObject({ code: 'input_missing', retryable: false });
+      expect(String((err as Error).message)).toContain('stage:tts/L001.wav');
+      expect(store.uploaded.size).toBe(0);
+    },
+    60_000,
+  );
+
+  test(
     'inspect: true checks the uploaded render and names inspect.json and the sheets in the manifest',
     async () => {
       if (!sourceVideoPath || !existsSync(sourceVideoPath)) return;

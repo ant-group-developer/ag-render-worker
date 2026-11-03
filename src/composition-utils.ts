@@ -120,6 +120,42 @@ export function collectCompositionInputs(composition: Composition): Set<string> 
   return inputs;
 }
 
+/**
+ * Input composition dựng được khi thiếu: logo và thư mục brand (bỏ đi thì video ra không có logo / font brand). Mọi input
+ * khác (footage, lời dẫn, nhạc) là bắt buộc: thiếu thì video sai, job phải hỏng.
+ */
+export function optionalCompositionInputs(composition: Composition): Set<string> {
+  const inputs = new Set<string>();
+  if (composition.logo?.path) inputs.add(composition.logo.path);
+  if (composition.brand?.dir) inputs.add(composition.brand.dir);
+  if (composition.brand?.fonts_dir) inputs.add(composition.brand.fonts_dir);
+  return inputs;
+}
+
+/** Bỏ khỏi composition các input tuỳ chọn không tải được: logo, hoặc cả brand khi một thư mục của nó thiếu. */
+export function withoutOptionalInputs(composition: Composition, missing: ReadonlySet<string>): Composition {
+  if (missing.size === 0) return composition;
+  const logoMissing = !!composition.logo?.path && missing.has(composition.logo.path);
+  const brand = composition.brand;
+  const brandMissing = !!brand && ((!!brand.dir && missing.has(brand.dir)) || (!!brand.fonts_dir && missing.has(brand.fonts_dir)));
+  return {
+    ...composition,
+    ...(logoMissing ? { logo: null } : {}),
+    ...(brandMissing ? { brand: null } : {}),
+  };
+}
+
+/** Tiền tố input logic còn phải tải (chưa thành đường dẫn cục bộ). */
+const LOGICAL_INPUT_RE = /^(stage|library):/;
+
+/**
+ * Các đường dẫn composition còn là input logic (`stage:` / `library:`) sau khi đã ghi đè: render với chúng thì ffmpeg
+ * không mở được file hoặc dựng thiếu (lời dẫn, nhạc). Rỗng = mọi input đã có file cục bộ.
+ */
+export function unresolvedCompositionInputs(composition: Composition): string[] {
+  return [...collectCompositionInputs(composition)].filter((name) => LOGICAL_INPUT_RE.test(name));
+}
+
 // ---- Ghi đè đường dẫn ----
 
 /**
