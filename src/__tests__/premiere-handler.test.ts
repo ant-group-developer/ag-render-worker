@@ -420,11 +420,16 @@ describe('studio.export_premiere handler (mocked, with ffmpeg)', () => {
     expect(transitions[1]).toMatch(/<start>35<\/start>\s*<end>45<\/end>\s*<alignment>center<\/alignment>[\s\S]*Dip to Color Dissolve/);
   }, 120_000);
 
-  test('a tts episode: no source sound, the narration on A3, the music ducked under it', async () => {
+  test('a tts episode: the source sound on A1 dipping under the line, the narration on A3, the music ducked under it', async () => {
     if (!ffmpegOk) { console.log('skipping: ffmpeg not available'); return; }
     const { xml, manifest } = await exportRun(cutComposition(), { 'stage:voice/L001.wav': voicePath, 'stage:music.wav': musicPath });
-    // The render plays only the narration when the voice is tts, even though the segments keep has_audio.
-    expect(xml).not.toContain('clipitem-a');
+    // The render keeps the footage's sound under a tts voice: 0 dB, down to -12 dB (0.25119) from frame 6 to 8 (the line
+    // at 0.3 s), back up from 33 (1.3 s) to 45 (+0.5 s). Keyframes count from each A1 clip's start.
+    const levels = (id: string) => [...(xml.match(new RegExp(`<clipitem id="${id}">([\\s\\S]*?)</clipitem>`))?.[1] ?? '').matchAll(/<when>(\d+)<\/when>\s*<value>([\d.]+)<\/value>/g)]
+      .map((m) => [Number(m[1]), Number(m[2])]);
+    expect(levels('clipitem-a1')).toEqual([[0, 1], [6, 1], [8, 0.25119], [20, 0.25119]]);
+    expect(levels('clipitem-a2')).toEqual([[0, 0.25119], [13, 0.25119], [20, 0.56234]]);
+    expect(levels('clipitem-a3')).toEqual([[0, 0.56234], [5, 1], [20, 1]]);
     // 0.3 s → frame 8; the 1 s WAV is 25 frames.
     expect(clipitem(xml, 'clipitem-n1')).toMatchObject({ start: '8', end: '33', in: '0', out: '25' });
     expect(xml).toContain('<pathurl>media/voice-L001.wav</pathurl>');

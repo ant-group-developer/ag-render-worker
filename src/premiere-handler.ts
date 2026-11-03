@@ -16,7 +16,7 @@ import {
 import type { JobResult } from '@ag-farm/protocol';
 import type { JobContext } from '@ag-farm/worker-sdk';
 import { NonRetryableError } from '@ag-farm/worker-sdk';
-import { studioOverlayAss, CompositionSchema } from '@ag-studio/render';
+import { studioOverlayAss, CompositionSchema, sourceDuckPoints } from '@ag-studio/render';
 import { probeMedia, runFfmpeg, resolveFfmpeg, resolveFfprobe } from './ffmpeg-utils.js';
 import { ArialMissingError, prepareArialDir } from './fonts.js';
 import type { RenderWorkerExtra } from './config.js';
@@ -434,10 +434,10 @@ async function handleExportPremiere(
   }));
 
   // Studio writes the timeline's `source_audio.muted` as `has_audio: false` on every segment
-  // (`timelineToComposition`), and the render then drops their sound; with a tts voice the render plays only the
-  // narration (`buildVoiceGraph` in @harness/core). A1 follows.
+  // (`timelineToComposition`), and the render then drops their sound; a tts voice plays over the rest of it
+  // (`buildVoiceGraph` in @harness/core). A1 follows.
   const assetSegments = segments.filter((s) => s.source_path.startsWith('asset:'));
-  const sourceAudioMuted = composition.voice === 'tts' || (assetSegments.length > 0 && assetSegments.every((s) => !s.has_audio));
+  const sourceAudioMuted = assetSegments.length > 0 && assetSegments.every((s) => !s.has_audio);
 
   const seq: PremiereSequence = {
     name: payload.name,
@@ -448,8 +448,12 @@ async function handleExportPremiere(
     overlays,
     music: musicEntry,
     sourceAudioMuted,
-    // With no voice the render keeps the videos' sound as a bed at -12 dB (`buildVoiceGraph` in @harness/core).
+    // With no voice the render keeps the videos' sound as a bed at -12 dB; under a tts one it plays at its own level
+    // between lines and dips under each, the same volume line (`buildVoiceGraph`, `sourceDuckPoints` in @harness/core).
     sourceAudioGainDb: composition.voice === 'none' ? -12 : 0,
+    ...(composition.voice === 'tts'
+      ? { sourceAudioEnvelope: sourceDuckPoints(composition.narration).map((p) => ({ frame: secondsToFrames(p.at, fps), gainDb: p.gain_db })) }
+      : {}),
     narration,
     markers,
   };
