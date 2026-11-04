@@ -199,6 +199,18 @@ describe('studio.tts handler', () => {
     expect(seen).toEqual({ ref_audio: '', instruct: 'female, young adult' });
   });
 
+  test('reads with 32 OmniVoice steps unless the worker config says otherwise', async () => {
+    const steps: number[] = [];
+    const fakeRunner: PythonRunner = async (job) => {
+      steps.push(job.num_step);
+      for (const line of job.lines) writeFileSync(line.out_path, Buffer.alloc(100));
+      return { kind: 'ok', result: { lines: job.lines.map((l) => ({ line_id: l.line_id, wav_path: l.out_path, duration_seconds: 0.5, chunks: [{ text: l.chunks[0] ?? '', start: 0, end: 0.5 }], words: null, alignment: 'chunk' as const })) } };
+    };
+    await makeStudioTtsHandler({ runner: fakeRunner })(ctx);
+    await makeStudioTtsHandler({ runner: fakeRunner, extra: { tts_num_step: 16 } })(ctx);
+    expect(steps).toEqual([32, 16]);
+  });
+
   test('runner returns contract error → NonRetryableError', async () => {
     const fakeRunner: PythonRunner = async () => ({
       kind: 'contract',

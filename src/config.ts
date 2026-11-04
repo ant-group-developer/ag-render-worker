@@ -45,6 +45,11 @@ export interface RenderWorkerExtra {
    * better with them). Default 'large-v3', the model studio.transcribe uses; '' = read without them.
    */
   tts_ref_asr_model?: string;
+  /**
+   * OmniVoice diffusion steps per chunk (4–64). Default 32, the value OmniVoice shows; 16 is its faster setting. Fewer
+   * steps slur and swallow words (the worker read with 10 until 0.14.10).
+   */
+  tts_num_step?: number;
   /** Thiết bị cho TTS: 'auto' (cuda nếu máy có GPU NVIDIA, không thì cpu), 'cuda', 'cpu'. Mặc định: 'auto'. */
   tts_device?: string;
   /** Encoder cho render: 'auto' (NVENC nếu có, không thì CPU), 'nvenc' hoặc 'cpu'. Mặc định: 'auto'. */
@@ -102,6 +107,7 @@ export function getExtra(extra: Record<string, unknown> | undefined): RenderWork
     fonts_dir: typeof extra['fonts_dir'] === 'string' ? extra['fonts_dir'] : undefined,
     bundled_fonts_dir: typeof extra['bundled_fonts_dir'] === 'string' ? extra['bundled_fonts_dir'] : undefined,
     tts_device: typeof extra['tts_device'] === 'string' ? extra['tts_device'] : undefined,
+    tts_num_step: intIn(extra['tts_num_step'], 4, 64),
     encoder:
       extra['encoder'] === 'auto' || extra['encoder'] === 'nvenc' || extra['encoder'] === 'cpu'
         ? extra['encoder']
