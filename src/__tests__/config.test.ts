@@ -39,6 +39,8 @@ describe('render worker config', () => {
     for (const bad of [0, 5, '3']) expect(getExtra({ final_concurrency: bad }).final_concurrency).toBeUndefined();
     expect(getExtra({ decode_threads: 8 }).decode_threads).toBe(8);
     for (const bad of [0, 33, 1.5]) expect(getExtra({ decode_threads: bad }).decode_threads).toBeUndefined();
+    expect(getExtra({ tts_num_step: 16 }).tts_num_step).toBe(16);
+    for (const bad of [3, 65, 12.5, '32']) expect(getExtra({ tts_num_step: bad }).tts_num_step).toBeUndefined();
   });
 
   test('a render has 3 hours for a final and 1 hour for a preview unless render_budget_s (600-86400 s) says otherwise', () => {

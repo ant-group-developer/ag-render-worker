@@ -50,6 +50,9 @@ export function resolveTtsDevice(configured: string | undefined): string {
 
 // ---- Handler ----
 
+/** OmniVoice diffusion steps per chunk unless `extra.tts_num_step` says otherwise. */
+export const TTS_NUM_STEP = 32;
+
 /** Context tuỳ chỉnh để inject runner (dùng trong tests). */
 export interface TtsHandlerContext {
   runner?: PythonRunner;
@@ -124,7 +127,8 @@ export function makeStudioTtsHandler(
       model: 'k2-fsa/OmniVoice',
       // half precision on the GPU (less VRAM, faster); the CPU runs float32
       dtype: device === 'cpu' ? 'float32' : 'float16',
-      num_step: 10,
+      // OmniVoice's own 32 steps (`tts_num_step` overrides): at 10 the voice slurred and swallowed words
+      num_step: extra.tts_num_step ?? TTS_NUM_STEP,
       speed: payload.voice.speed,
       language: payload.language,
       ref_audio: refAudioLocalPath || '',
